@@ -16,7 +16,7 @@ services:
       - database:/var/lib/postgresql/data
 
   documenso:
-    image: documenso/documenso:latest
+    image: documenso/documenso@sha256:f1043654ffd88edffa6ba5b2bbda2897723fc5e9ae06f56c1fe514ee2b567f05
     depends_on:
       database:
         condition: service_healthy
@@ -70,11 +70,12 @@ services:
       - NEXT_PUBLIC_DISABLE_MICROSOFT_SIGNIN=${NEXT_PUBLIC_DISABLE_MICROSOFT_SIGNIN}
       - NEXT_PUBLIC_DISABLE_OIDC_SIGNIN=${NEXT_PUBLIC_DISABLE_OIDC_SIGNIN}
       - NEXT_PUBLIC_DISABLE_OIDC_AUTO_REDIRECT=${NEXT_PUBLIC_DISABLE_OIDC_AUTO_REDIRECT}
+      - NEXT_PRIVATE_WEBHOOK_SSRF_BYPASS_HOSTS=${NEXT_PRIVATE_WEBHOOK_SSRF_BYPASS_HOSTS}
       - NEXT_PRIVATE_SIGNING_LOCAL_FILE_PATH=${NEXT_PRIVATE_SIGNING_LOCAL_FILE_PATH:-/opt/documenso/cert.p12}
       - NEXT_PRIVATE_SIGNING_PASSPHRASE=${NEXT_PRIVATE_SIGNING_PASSPHRASE}
       - NEXT_PUBLIC_USE_INTERNAL_URL_BROWSERLESS=${NEXT_PUBLIC_USE_INTERNAL_URL_BROWSERLESS}
     ports:
-      - ${PORT:-3000}:${PORT:-3000}
+      - 127.0.0.1:3010:${PORT:-3000}
     volumes:
       - /opt/documenso/cert.p12:/opt/documenso/cert.p12:ro
 
