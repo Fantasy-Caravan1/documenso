@@ -31,13 +31,7 @@ export const TemplateFooter = ({ isDocument = true, reportUrl }: TemplateFooterP
 
       {isDocument && !branding.brandingHidePoweredBy && (
         <Text className="my-4 text-base text-muted-foreground">
-          <Trans>
-            This document was sent using{' '}
-            <Link className="text-primary" href="https://documen.so/mail-footer">
-              Documenso
-            </Link>
-            .
-          </Trans>
+          <Trans>This document was sent by Fantasy Caravan.</Trans>
         </Text>
       )}
 
@@ -64,9 +58,13 @@ export const TemplateFooter = ({ isDocument = true, reportUrl }: TemplateFooterP
 
       {!branding.brandingEnabled && (
         <Text className="my-8 text-muted-foreground text-sm">
-          Documenso, Inc.
+          Fantasy Caravan
           <br />
-          2261 Market Street, #5211, San Francisco, CA 94114, USA
+          <Link href="mailto:sales@fantasycaravan.com.au">sales@fantasycaravan.com.au</Link>
+          <br />
+          <Link href="https://fantasycaravan.com.au" target="_blank">
+            https://fantasycaravan.com.au
+          </Link>
         </Text>
       )}
     </Section>

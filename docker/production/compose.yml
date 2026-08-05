@@ -16,7 +16,7 @@ services:
       - database:/var/lib/postgresql/data
 
   documenso:
-    image: documenso/documenso@sha256:f1043654ffd88edffa6ba5b2bbda2897723fc5e9ae06f56c1fe514ee2b567f05
+    image: documenso-fantasy:2.14.0-email-template
     depends_on:
       database:
         condition: service_healthy

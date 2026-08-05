@@ -1,3 +1,4 @@
+import { FieldType } from '@prisma/client';
 import Konva from 'konva';
 
 import { DEFAULT_STANDARD_FONT_SIZE } from '../../constants/pdf';
@@ -21,6 +22,48 @@ import type { FieldToRender, RenderFieldElementOptions } from './field-renderer'
 import { calculateFieldPosition } from './field-renderer';
 
 const DEFAULT_TEXT_X_PADDING = 6;
+const DATE_TEXT_X_PADDING = 2;
+const MIN_DATE_FONT_SIZE = 8;
+const FONT_SIZE_STEP = 0.5;
+
+const getBoundedTextWidth = (width: number) => Math.max(width, 1);
+
+const calculateSingleLineFittedFontSize = (params: {
+  textToRender: string;
+  fontSize: number;
+  fontFamily: string;
+  lineHeight: number;
+  letterSpacing: number;
+  width: number;
+  height: number;
+}) => {
+  const { textToRender, fontSize, fontFamily, lineHeight, letterSpacing, width, height } = params;
+
+  if (!textToRender) {
+    return fontSize;
+  }
+
+  for (let nextFontSize = fontSize; nextFontSize > MIN_DATE_FONT_SIZE; nextFontSize -= FONT_SIZE_STEP) {
+    const textNode = new Konva.Text({
+      text: textToRender,
+      fontSize: nextFontSize,
+      fontFamily,
+      lineHeight,
+      letterSpacing,
+      wrap: 'none',
+    });
+
+    const fits = textNode.width() <= width && textNode.height() <= height;
+
+    textNode.destroy();
+
+    if (fits) {
+      return nextFontSize;
+    }
+  }
+
+  return MIN_DATE_FONT_SIZE;
+};
 
 const upsertFieldText = (field: FieldToRender, options: RenderFieldElementOptions) => {
   const { pageWidth, pageHeight, mode = 'edit', pageLayer, translations } = options;
@@ -43,6 +86,7 @@ const upsertFieldText = (field: FieldToRender, options: RenderFieldElementOption
   const textX = 0;
   const textY = 0;
   const textFontSize = fieldMeta?.fontSize || DEFAULT_STANDARD_FONT_SIZE;
+  let renderedTextFontSize = textFontSize;
 
   // By default, render the field name or label centered.
   // isLabel tracks whether we're rendering the field type name (like "Text", "Date", "Email")
@@ -104,25 +148,54 @@ const upsertFieldText = (field: FieldToRender, options: RenderFieldElementOption
     }
   }
 
-  const overflowLayout = calculateOverflowLayout({
-    overflowMode: resolveFieldOverflowMode(fieldMeta),
-    isLabel,
-    textToRender,
-    fontSize: textFontSize,
-    fontFamily: konvaTextFontFamily,
-    lineHeight: textLineHeight,
-    letterSpacing: textLetterSpacing,
-    textAlign,
-    verticalAlign: textVerticalAlign,
-    baseX: textX + DEFAULT_TEXT_X_PADDING,
-    baseY: textY,
-    baseWidth: fieldWidth - DEFAULT_TEXT_X_PADDING * 2,
-    baseHeight: fieldHeight,
-    groupX: fieldX,
-    groupY: fieldY,
-    pageWidth,
-    pageHeight,
-  });
+  const isInsertedDateField = field.inserted && field.type === FieldType.DATE;
+  const textXPadding = isInsertedDateField ? DATE_TEXT_X_PADDING : DEFAULT_TEXT_X_PADDING;
+  const textWidth = getBoundedTextWidth(fieldWidth - textXPadding * 2);
+
+  if (isInsertedDateField) {
+    textVerticalAlign = FIELD_DEFAULT_GENERIC_VERTICAL_ALIGN;
+    textLineHeight = FIELD_DEFAULT_LINE_HEIGHT;
+    textLetterSpacing = FIELD_DEFAULT_LETTER_SPACING;
+    renderedTextFontSize = calculateSingleLineFittedFontSize({
+      textToRender,
+      fontSize: textFontSize,
+      fontFamily: konvaTextFontFamily,
+      lineHeight: textLineHeight,
+      letterSpacing: textLetterSpacing,
+      width: textWidth,
+      height: fieldHeight,
+    });
+  }
+
+  const overflowLayout = isInsertedDateField
+    ? {
+        x: textX + textXPadding,
+        y: textY,
+        width: textWidth,
+        height: fieldHeight,
+        wrap: 'none' as const,
+        textAlign,
+        verticalAlign: textVerticalAlign,
+      }
+    : calculateOverflowLayout({
+        overflowMode: resolveFieldOverflowMode(fieldMeta),
+        isLabel,
+        textToRender,
+        fontSize: renderedTextFontSize,
+        fontFamily: konvaTextFontFamily,
+        lineHeight: textLineHeight,
+        letterSpacing: textLetterSpacing,
+        textAlign,
+        verticalAlign: textVerticalAlign,
+        baseX: textX + textXPadding,
+        baseY: textY,
+        baseWidth: textWidth,
+        baseHeight: fieldHeight,
+        groupX: fieldX,
+        groupY: fieldY,
+        pageWidth,
+        pageHeight,
+      });
 
   // Note: Do not use native text padding since it's uniform.
   // We only want to have padding on the left and right hand sides.
@@ -132,7 +205,7 @@ const upsertFieldText = (field: FieldToRender, options: RenderFieldElementOption
     verticalAlign: overflowLayout.verticalAlign,
     wrap: overflowLayout.wrap,
     text: textToRender,
-    fontSize: textFontSize,
+    fontSize: renderedTextFontSize,
     align: overflowLayout.textAlign,
     lineHeight: textLineHeight,
     letterSpacing: textLetterSpacing,
@@ -147,10 +220,13 @@ const upsertFieldText = (field: FieldToRender, options: RenderFieldElementOption
     isLabel,
     textToRender,
     textFontSize,
+    renderedTextFontSize,
     textAlign,
     textVerticalAlign,
     textLineHeight,
     textLetterSpacing,
+    textXPadding,
+    isInsertedDateField,
   };
 };
 
@@ -178,10 +254,13 @@ export const renderGenericTextFieldElement = (field: FieldToRender, options: Ren
     isLabel,
     textToRender,
     textFontSize,
+    renderedTextFontSize,
     textAlign,
     textVerticalAlign,
     textLineHeight,
     textLetterSpacing,
+    textXPadding,
+    isInsertedDateField,
   } = upsertFieldText(field, options);
 
   fieldGroup.add(fieldRect);
@@ -199,11 +278,13 @@ export const renderGenericTextFieldElement = (field: FieldToRender, options: Ren
     const rectHeight = fieldRect.height() * groupScaleY;
 
     // During active transform, use crop dimensions (field bounds only).
-    fieldText.x(DEFAULT_TEXT_X_PADDING);
+    const nextTextWidth = getBoundedTextWidth(rectWidth - textXPadding * 2);
+
+    fieldText.x(textXPadding);
     fieldText.y(0);
-    fieldText.width(rectWidth - DEFAULT_TEXT_X_PADDING * 2);
+    fieldText.width(nextTextWidth);
     fieldText.height(rectHeight);
-    fieldText.wrap('word');
+    fieldText.wrap(isInsertedDateField ? 'none' : 'word');
 
     fieldGroup.getLayer()?.batchDraw();
   });
@@ -214,32 +295,55 @@ export const renderGenericTextFieldElement = (field: FieldToRender, options: Ren
 
     const rectWidth = fieldRect.width();
     const rectHeight = fieldRect.height();
+    const nextTextWidth = getBoundedTextWidth(rectWidth - textXPadding * 2);
+    const nextFontSize = isInsertedDateField
+      ? calculateSingleLineFittedFontSize({
+          textToRender,
+          fontSize: textFontSize,
+          fontFamily: konvaTextFontFamily,
+          lineHeight: textLineHeight,
+          letterSpacing: textLetterSpacing,
+          width: nextTextWidth,
+          height: rectHeight,
+        })
+      : renderedTextFontSize;
 
     // Recalculate overflow layout with new field dimensions.
-    const newOverflowLayout = calculateOverflowLayout({
-      overflowMode: resolveFieldOverflowMode(fieldMeta),
-      isLabel,
-      textToRender,
-      fontSize: textFontSize,
-      fontFamily: konvaTextFontFamily,
-      lineHeight: textLineHeight,
-      letterSpacing: textLetterSpacing,
-      textAlign,
-      verticalAlign: textVerticalAlign,
-      baseX: DEFAULT_TEXT_X_PADDING,
-      baseY: 0,
-      baseWidth: rectWidth - DEFAULT_TEXT_X_PADDING * 2,
-      baseHeight: rectHeight,
-      groupX: fieldGroup.x(),
-      groupY: fieldGroup.y(),
-      pageWidth,
-      pageHeight,
-    });
+    const newOverflowLayout = isInsertedDateField
+      ? {
+          x: textXPadding,
+          y: 0,
+          width: nextTextWidth,
+          height: rectHeight,
+          wrap: 'none' as const,
+          textAlign,
+          verticalAlign: textVerticalAlign,
+        }
+      : calculateOverflowLayout({
+          overflowMode: resolveFieldOverflowMode(fieldMeta),
+          isLabel,
+          textToRender,
+          fontSize: nextFontSize,
+          fontFamily: konvaTextFontFamily,
+          lineHeight: textLineHeight,
+          letterSpacing: textLetterSpacing,
+          textAlign,
+          verticalAlign: textVerticalAlign,
+          baseX: textXPadding,
+          baseY: 0,
+          baseWidth: nextTextWidth,
+          baseHeight: rectHeight,
+          groupX: fieldGroup.x(),
+          groupY: fieldGroup.y(),
+          pageWidth,
+          pageHeight,
+        });
 
     fieldText.x(newOverflowLayout.x);
     fieldText.y(newOverflowLayout.y);
     fieldText.width(newOverflowLayout.width);
     fieldText.height(newOverflowLayout.height);
+    fieldText.fontSize(nextFontSize);
     fieldText.wrap(newOverflowLayout.wrap);
     fieldText.verticalAlign(newOverflowLayout.verticalAlign);
 

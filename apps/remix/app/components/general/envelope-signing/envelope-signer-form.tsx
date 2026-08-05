@@ -3,12 +3,14 @@ import { Input } from '@documenso/ui/primitives/input';
 import { Label } from '@documenso/ui/primitives/label';
 import { RadioGroup, RadioGroupItem } from '@documenso/ui/primitives/radio-group';
 import { SignaturePadDialog } from '@documenso/ui/primitives/signature-pad/signature-pad-dialog';
+import { useToast } from '@documenso/ui/primitives/use-toast';
 import { Plural, Trans } from '@lingui/react/macro';
-import { RecipientRole } from '@prisma/client';
-import { useMemo } from 'react';
+import { FieldType, RecipientRole } from '@prisma/client';
+import { useMemo, useState } from 'react';
 
 import { useEmbedSigningContext } from '~/components/embed/embed-signing-context';
 
+import { useRequiredDocumentSigningAuthContext } from '../document-signing/document-signing-auth-provider';
 import { useRequiredEnvelopeSigningContext } from '../document-signing/envelope-signing-provider';
 
 export default function EnvelopeSignerForm() {
@@ -24,15 +26,65 @@ export default function EnvelopeSignerForm() {
     assistantRecipients,
     selectedAssistantRecipient,
     setSelectedAssistantRecipientId,
+    signField,
   } = useRequiredEnvelopeSigningContext();
+  const { executeActionAuthProcedure } = useRequiredDocumentSigningAuthContext();
 
   const { isNameLocked, isEmailLocked } = useEmbedSigningContext() || {};
+  const { toast } = useToast();
+  const [isAutoSigningSignature, setIsAutoSigningSignature] = useState(false);
 
   const hasSignatureField = useMemo(() => {
     return recipientFields.some((field) => isSignatureFieldType(field.type));
   }, [recipientFields]);
 
-  const isSubmitting = false;
+  const unsignedSignatureFields = useMemo(() => {
+    if (recipient.role === RecipientRole.ASSISTANT || recipient.role === RecipientRole.VIEWER) {
+      return [];
+    }
+
+    return recipientFields.filter((field) => field.type === FieldType.SIGNATURE && !field.inserted);
+  }, [recipient.role, recipientFields]);
+
+  const isSubmitting = isAutoSigningSignature;
+
+  const handleSignatureChange = async (nextSignature: string) => {
+    setSignature(nextSignature ?? '');
+
+    if (!nextSignature || unsignedSignatureFields.length === 0) {
+      return;
+    }
+
+    setIsAutoSigningSignature(true);
+
+    try {
+      await executeActionAuthProcedure({
+        onReauthFormSubmit: async (authOptions) => {
+          for (const field of unsignedSignatureFields) {
+            await signField(
+              field.id,
+              {
+                type: FieldType.SIGNATURE,
+                value: nextSignature,
+              },
+              authOptions,
+            );
+          }
+        },
+        actionTarget: FieldType.SIGNATURE,
+      });
+    } catch (err) {
+      console.error(err);
+
+      toast({
+        title: 'Error',
+        description: 'An error occurred while signing the field.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsAutoSigningSignature(false);
+    }
+  };
 
   if (recipient.role === RecipientRole.VIEWER) {
     return null;
@@ -117,7 +169,8 @@ export default function EnvelopeSignerForm() {
               disabled={isSubmitting}
               fullName={fullName}
               value={signature ?? ''}
-              onChange={(v) => setSignature(v ?? '')}
+              onChange={(v) => void handleSignatureChange(v ?? '')}
+              dialogConfirmText="Sign"
               typedSignatureEnabled={envelope.documentMeta.typedSignatureEnabled}
               uploadSignatureEnabled={envelope.documentMeta.uploadSignatureEnabled}
               drawSignatureEnabled={envelope.documentMeta.drawSignatureEnabled}

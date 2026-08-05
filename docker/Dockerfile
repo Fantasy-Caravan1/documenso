@@ -42,6 +42,7 @@ WORKDIR /app
 ENV HUSKY 0
 ENV DOCKER_OUTPUT 1
 ENV NEXT_TELEMETRY_DISABLED 1
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # Encryption keys
 ARG NEXT_PRIVATE_ENCRYPTION_KEY="CAFEBABE"
@@ -72,7 +73,7 @@ COPY --from=builder /app/out/package-lock.json ./package-lock.json
 COPY --from=builder /app/lingui.config.ts ./lingui.config.ts
 COPY --from=builder /app/patches ./patches
 
-RUN npm ci
+RUN npm ci && npm cache clean --force
 
 # Then copy all the source code (as it changes more often)
 COPY --from=builder /app/out/full/ .
@@ -82,6 +83,8 @@ COPY turbo.json turbo.json
 RUN npm install -g "turbo@^1.9.3"
 
 RUN turbo run build --filter=@documenso/remix...
+
+RUN npm prune --omit=dev && npm cache clean --force
 
 ###########################
 #     RUNNER CONTAINER    #
@@ -111,8 +114,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/out/json/ .
 COPY --from=builder --chown=nodejs:nodejs /app/out/full/packages/tailwind-config ./packages/tailwind-config
 # Copy the patches across
 COPY --from=builder --chown=nodejs:nodejs /app/patches ./patches
-
-RUN npm ci --only=production
+COPY --from=installer --chown=nodejs:nodejs /app/node_modules ./node_modules
 
 # Automatically leverage output traces to reduce image size
 # https://nodejs.org/docs/advanced-features/output-file-tracing

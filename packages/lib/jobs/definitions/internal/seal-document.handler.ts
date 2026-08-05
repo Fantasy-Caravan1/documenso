@@ -20,7 +20,6 @@ import { getCertificatePdf } from '../../../server-only/htmltopdf/get-certificat
 import { insertFieldInPDFV1 } from '../../../server-only/pdf/insert-field-in-pdf-v1';
 import { insertFieldInPDFV2 } from '../../../server-only/pdf/insert-field-in-pdf-v2';
 import { legacy_insertFieldInPDF } from '../../../server-only/pdf/legacy-insert-field-in-pdf';
-import { getTeamSettings } from '../../../server-only/team/get-team-settings';
 import { triggerWebhook } from '../../../server-only/webhooks/trigger/trigger-webhook';
 import { DOCUMENT_AUDIT_LOG_TYPE, type TDocumentAuditLog } from '../../../types/document-audit-logs';
 import { isTspEnvelope } from '../../../types/signature-level';
@@ -75,11 +74,6 @@ export const run = async ({ payload, io }: { payload: TSealDocumentJobDefinition
     if (envelope.envelopeItems.length === 0) {
       throw new Error('At least one envelope item required');
     }
-
-    const settings = await getTeamSettings({
-      userId: envelope.userId,
-      teamId: envelope.teamId,
-    });
 
     // Ensure all CC recipients are marked as signed
     await prisma.recipient.updateMany({
@@ -205,8 +199,11 @@ export const run = async ({ payload, io }: { payload: TSealDocumentJobDefinition
 
     const usePlaywrightPdf = NEXT_PRIVATE_USE_PLAYWRIGHT_PDF();
 
-    const needsCertificate = settings.includeSigningCertificate;
-    const needsAuditLog = settings.includeAuditLog;
+    // Fantasy Caravan sends signed contracts as the business document only.
+    // The Documenso certificate/audit-log pages remain available separately,
+    // but must not be appended to the final signed PDF.
+    const needsCertificate = false;
+    const needsAuditLog = false;
 
     const newDocumentData: Array<{ oldDocumentDataId: string; newDocumentDataId: string }> = [];
 

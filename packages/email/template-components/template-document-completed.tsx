@@ -1,6 +1,6 @@
 import { Trans } from '@lingui/react/macro';
 
-import { Button, Column, Img, Section, Text } from '../components';
+import { Column, Img, Section, Text } from '../components';
 import { TemplateDocumentImage } from './template-document-image';
 
 export interface TemplateDocumentCompletedProps {
@@ -11,7 +11,6 @@ export interface TemplateDocumentCompletedProps {
 }
 
 export const TemplateDocumentCompleted = ({
-  downloadLink,
   documentName,
   assetBaseUrl,
   customBody,
@@ -43,18 +42,8 @@ export const TemplateDocumentCompleted = ({
         </Text>
 
         <Text className="my-1 text-center text-base text-muted-foreground">
-          <Trans>Continue by downloading the document.</Trans>
+          <Trans>A copy of the signed document is attached to this email for your records.</Trans>
         </Text>
-
-        <Section className="mt-8 mb-6 text-center">
-          <Button
-            className="rounded-lg border border-border border-solid px-4 py-2 text-center font-medium text-foreground text-sm no-underline"
-            href={downloadLink}
-          >
-            <Img src={getAssetUrl('/static/download.png')} className="mr-2 mb-0.5 inline h-5 w-5 align-middle" alt="" />
-            <Trans>Download</Trans>
-          </Button>
-        </Section>
       </Section>
     </>
   );
