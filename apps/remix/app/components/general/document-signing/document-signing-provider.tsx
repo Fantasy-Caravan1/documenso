@@ -1,4 +1,3 @@
-import { isBase64Image } from '@documenso/lib/constants/signatures';
 import { createContext, useContext, useState } from 'react';
 
 export type DocumentSigningContextValue = {
@@ -29,9 +28,13 @@ export const useRequiredDocumentSigningContext = () => {
 export interface DocumentSigningProviderProps {
   fullName?: string | null;
   email?: string | null;
+  /** @deprecated Ignored. Every contract requires a fresh drawn signature. */
   signature?: string | null;
+  /** @deprecated Ignored. New signatures are always drawn. */
   typedSignatureEnabled?: boolean;
+  /** @deprecated Ignored. New signatures are always drawn. */
   uploadSignatureEnabled?: boolean;
+  /** @deprecated Ignored. New signatures are always drawn. */
   drawSignatureEnabled?: boolean;
   children: React.ReactNode;
 }
@@ -39,32 +42,13 @@ export interface DocumentSigningProviderProps {
 export const DocumentSigningProvider = ({
   fullName: initialFullName,
   email: initialEmail,
-  signature: initialSignature,
-  typedSignatureEnabled = true,
-  uploadSignatureEnabled = true,
-  drawSignatureEnabled = true,
   children,
 }: DocumentSigningProviderProps) => {
   const [fullName, setFullName] = useState(initialFullName || '');
   const [email, setEmail] = useState(initialEmail || '');
 
-  // Ensure the user signature doesn't show up if it's not allowed.
-  const [signature, setSignature] = useState(
-    (() => {
-      const sig = initialSignature || '';
-      const isBase64 = isBase64Image(sig);
-
-      if (isBase64 && (uploadSignatureEnabled || drawSignatureEnabled)) {
-        return sig;
-      }
-
-      if (!isBase64 && typedSignatureEnabled) {
-        return sig;
-      }
-
-      return null;
-    })(),
-  );
+  // Each contract must capture a fresh signature from the drawing canvas.
+  const [signature, setSignature] = useState<string | null>(null);
 
   return (
     <DocumentSigningContext.Provider

@@ -8,6 +8,7 @@ import { calculateOverflowLayout } from './calculate-overflow-layout';
 import { createFieldHoverInteraction, upsertFieldGroup, upsertFieldRect } from './field-generic-items';
 import type { FieldToRender, RenderFieldElementOptions } from './field-renderer';
 import { calculateFieldPosition } from './field-renderer';
+import { resolveSignatureValue } from './resolve-signature-value';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let SkiaImage: any;
@@ -135,6 +136,7 @@ const createFieldSignature = (field: FieldToRender, options: RenderFieldElementO
   let textToRender: string = fieldTypeName;
 
   const signature = field.signature;
+  const resolvedSignature = resolveSignatureValue(signature);
 
   // Handle edit mode.
   if (mode === 'edit') {
@@ -142,13 +144,13 @@ const createFieldSignature = (field: FieldToRender, options: RenderFieldElementO
 
     // If the field has already been signed and we have the signature data
     // available, render it. Otherwise leave the field type label as a placeholder.
-    if (field.inserted && signature?.typedSignature) {
-      textToRender = signature.typedSignature;
+    if (field.inserted && resolvedSignature?.type === 'typed') {
+      textToRender = resolvedSignature.value;
     }
 
-    if (field.inserted && signature?.signatureImageAsBase64) {
+    if (field.inserted && resolvedSignature?.type === 'image') {
       return {
-        node: createSignatureImage(signature.signatureImageAsBase64, fieldWidth, fieldHeight),
+        node: createSignatureImage(resolvedSignature.value, fieldWidth, fieldHeight),
         isImageSignature: true,
         isLabel: false,
       };
@@ -163,13 +165,13 @@ const createFieldSignature = (field: FieldToRender, options: RenderFieldElementO
       throw new AppError('MISSING_SIGNATURE');
     }
 
-    if (signature?.typedSignature) {
-      textToRender = signature.typedSignature;
+    if (resolvedSignature?.type === 'typed') {
+      textToRender = resolvedSignature.value;
     }
 
-    if (signature?.signatureImageAsBase64) {
+    if (resolvedSignature?.type === 'image') {
       return {
-        node: createSignatureImage(signature.signatureImageAsBase64, fieldWidth, fieldHeight),
+        node: createSignatureImage(resolvedSignature.value, fieldWidth, fieldHeight),
         isImageSignature: true,
         isLabel: false,
       };
@@ -180,7 +182,7 @@ const createFieldSignature = (field: FieldToRender, options: RenderFieldElementO
 
   // Whether we're rendering the field type name (like "Signature") vs actual signed content.
   // Overflow should not apply to the label.
-  const isLabel = !signature?.typedSignature;
+  const isLabel = resolvedSignature?.type !== 'typed';
 
   const overflowLayout = calculateOverflowLayout({
     overflowMode: resolveFieldOverflowMode(fieldMeta),

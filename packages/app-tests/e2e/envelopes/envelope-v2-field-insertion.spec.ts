@@ -6,6 +6,7 @@ import { DocumentStatus, FieldType } from '@prisma/client';
 import { DateTime } from 'luxon';
 
 import { apiSeedPendingDocument } from '../fixtures/api-seeds';
+import { drawSignature } from '../fixtures/signature';
 
 const PDF_PAGE_SELECTOR = 'img[data-page-number]';
 
@@ -39,8 +40,7 @@ test.describe('V2 envelope field insertion during signing', () => {
 
     // Set up a signature via the sidebar form.
     await page.getByTestId('signature-pad-dialog-button').click();
-    await page.getByRole('tab', { name: 'Type' }).click();
-    await page.getByTestId('signature-pad-type-input').fill('Signature');
+    await drawSignature(page);
     await page.getByRole('button', { name: 'Next' }).click();
 
     // Click the signature field on the canvas.
@@ -148,8 +148,7 @@ test.describe('V2 envelope field insertion during signing', () => {
 
     // Set up a signature via the sidebar form.
     await page.getByTestId('signature-pad-dialog-button').click();
-    await page.getByRole('tab', { name: 'Type' }).click();
-    await page.getByTestId('signature-pad-type-input').fill('Signature');
+    await drawSignature(page);
     await page.getByRole('button', { name: 'Next' }).click();
 
     // Click each non-date field on the Konva canvas to insert it.

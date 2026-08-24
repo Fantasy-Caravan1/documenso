@@ -65,9 +65,9 @@ All webhook events share a common structure:
 | `redirectUrl`              | string? | URL to redirect after signing           |
 | `signingOrder`             | string  | `PARALLEL` or `SEQUENTIAL`              |
 | `allowDictateNextSigner`   | boolean | Whether signers can choose the next signer |
-| `typedSignatureEnabled`    | boolean | Whether typed signatures are allowed    |
-| `uploadSignatureEnabled`   | boolean | Whether uploaded signatures are allowed |
-| `drawSignatureEnabled`     | boolean | Whether drawn signatures are allowed    |
+| `typedSignatureEnabled`    | boolean | Deprecated; always `false`              |
+| `uploadSignatureEnabled`   | boolean | Deprecated; always `false`              |
+| `drawSignatureEnabled`     | boolean | Always `true`                            |
 | `language`                 | string  | Document language code                  |
 | `distributionMethod`       | string  | How document is distributed             |
 | `emailSettings`            | object? | Custom email settings for this document |
@@ -135,8 +135,8 @@ Triggered when a new document is created.
       "redirectUrl": null,
       "signingOrder": "PARALLEL",
       "allowDictateNextSigner": false,
-      "typedSignatureEnabled": true,
-      "uploadSignatureEnabled": true,
+      "typedSignatureEnabled": false,
+      "uploadSignatureEnabled": false,
       "drawSignatureEnabled": true,
       "language": "en",
       "distributionMethod": "EMAIL",
@@ -227,8 +227,8 @@ The document status changes to `PENDING` and recipients have `sendStatus: "SENT"
       "redirectUrl": null,
       "signingOrder": "PARALLEL",
       "allowDictateNextSigner": false,
-      "typedSignatureEnabled": true,
-      "uploadSignatureEnabled": true,
+      "typedSignatureEnabled": false,
+      "uploadSignatureEnabled": false,
       "drawSignatureEnabled": true,
       "language": "en",
       "distributionMethod": "EMAIL",
@@ -419,8 +419,8 @@ The document status changes to `COMPLETED` and `completedAt` is set.
       "redirectUrl": null,
       "signingOrder": "PARALLEL",
       "allowDictateNextSigner": false,
-      "typedSignatureEnabled": true,
-      "uploadSignatureEnabled": true,
+      "typedSignatureEnabled": false,
+      "uploadSignatureEnabled": false,
       "drawSignatureEnabled": true,
       "language": "en",
       "distributionMethod": "EMAIL",
@@ -596,8 +596,8 @@ This event is **not** triggered when a recipient hides a document from their inb
       "redirectUrl": "",
       "signingOrder": "PARALLEL",
       "allowDictateNextSigner": false,
-      "typedSignatureEnabled": true,
-      "uploadSignatureEnabled": true,
+      "typedSignatureEnabled": false,
+      "uploadSignatureEnabled": false,
       "drawSignatureEnabled": true,
       "language": "en",
       "distributionMethod": "EMAIL",

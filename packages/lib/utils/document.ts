@@ -1,6 +1,7 @@
 import type { DocumentMeta, Envelope, OrganisationGlobalSettings, Recipient, Team, User } from '@prisma/client';
 import { DocumentDistributionMethod, DocumentStatus } from '@prisma/client';
 
+import { DRAW_ONLY_SIGNATURE_SETTINGS } from '../constants/signatures';
 import { DEFAULT_DOCUMENT_TIME_ZONE } from '../constants/time-zones';
 import { resolveSigningOrder } from '../server-only/signature-level/resolve-signing-order';
 import type { TDocumentLite, TDocumentMany } from '../types/document';
@@ -55,10 +56,10 @@ export const extractDerivedDocumentMeta = (
     allowDictateNextSigner: meta.allowDictateNextSigner ?? false,
     distributionMethod: meta.distributionMethod || DocumentDistributionMethod.EMAIL, // Todo: Make this a setting.
 
-    // Signature settings.
-    typedSignatureEnabled: meta.typedSignatureEnabled ?? settings.typedSignatureEnabled,
-    uploadSignatureEnabled: meta.uploadSignatureEnabled ?? settings.uploadSignatureEnabled,
-    drawSignatureEnabled: meta.drawSignatureEnabled ?? settings.drawSignatureEnabled,
+    // Signature settings. New envelopes are intentionally draw-only. The
+    // legacy columns remain in place so previously signed envelopes can still
+    // render typed signatures.
+    ...DRAW_ONLY_SIGNATURE_SETTINGS,
 
     // Email settings.
     emailId: meta.emailId ?? settings.emailId,

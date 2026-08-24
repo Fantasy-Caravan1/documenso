@@ -95,25 +95,12 @@ export const extractTeamSignatureSettings = (
     uploadSignatureEnabled: boolean | null;
   } | null,
 ) => {
-  if (!settings) {
-    return [DocumentSignatureType.TYPE, DocumentSignatureType.UPLOAD, DocumentSignatureType.DRAW];
-  }
+  const isInheriting =
+    settings?.typedSignatureEnabled === null &&
+    settings.drawSignatureEnabled === null &&
+    settings.uploadSignatureEnabled === null;
 
-  const signatureTypes: DocumentSignatureType[] = [];
-
-  if (settings.typedSignatureEnabled) {
-    signatureTypes.push(DocumentSignatureType.TYPE);
-  }
-
-  if (settings.drawSignatureEnabled) {
-    signatureTypes.push(DocumentSignatureType.DRAW);
-  }
-
-  if (settings.uploadSignatureEnabled) {
-    signatureTypes.push(DocumentSignatureType.UPLOAD);
-  }
-
-  return signatureTypes;
+  return isInheriting ? [] : [DocumentSignatureType.DRAW];
 };
 
 export type BuildTeamWhereQueryOptions = {

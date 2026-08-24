@@ -63,18 +63,4 @@ export const DOCUMENT_SIGNATURE_TYPES = {
     }),
     value: DocumentSignatureType.DRAW,
   },
-  [DocumentSignatureType.TYPE]: {
-    label: msg({
-      message: `Type`,
-      context: `Type signature`,
-    }),
-    value: DocumentSignatureType.TYPE,
-  },
-  [DocumentSignatureType.UPLOAD]: {
-    label: msg({
-      message: `Upload`,
-      context: `Upload signature`,
-    }),
-    value: DocumentSignatureType.UPLOAD,
-  },
-} satisfies Record<DocumentSignatureType, DocumentSignatureTypeData>;
+} satisfies Partial<Record<DocumentSignatureType, DocumentSignatureTypeData>>;

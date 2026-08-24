@@ -133,16 +133,15 @@ test.describe('AutoSave Settings Step', () => {
     }).toPass();
   });
 
-  test('should autosave the allowed signature types change', async ({ page }) => {
+  test('should keep documents draw-only', async ({ page }) => {
     const { user, document, team } = await setupDocument(page);
 
     await page.getByRole('button', { name: 'Advanced Options' }).click();
 
     await page.getByRole('combobox').nth(3).click();
-    await page.getByRole('option', { name: 'Draw' }).click();
-    await page.getByRole('option', { name: 'Type' }).click();
-
-    await triggerAutosave(page);
+    await expect(page.getByRole('option', { name: 'Draw' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'Type' })).toHaveCount(0);
+    await expect(page.getByRole('option', { name: 'Upload' })).toHaveCount(0);
 
     await expect(async () => {
       const retrieved = await getEnvelopeById({
@@ -155,9 +154,9 @@ test.describe('AutoSave Settings Step', () => {
         teamId: team.id,
       });
 
-      expect(retrieved.documentMeta?.drawSignatureEnabled).toBe(false);
+      expect(retrieved.documentMeta?.drawSignatureEnabled).toBe(true);
       expect(retrieved.documentMeta?.typedSignatureEnabled).toBe(false);
-      expect(retrieved.documentMeta?.uploadSignatureEnabled).toBe(true);
+      expect(retrieved.documentMeta?.uploadSignatureEnabled).toBe(false);
     }).toPass();
   });
 

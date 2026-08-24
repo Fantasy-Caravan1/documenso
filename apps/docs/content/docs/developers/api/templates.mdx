@@ -460,9 +460,6 @@ const response = await fetch(`${BASE_URL}/template/use`, {
       dateFormat: 'MM/dd/yyyy',
       redirectUrl: 'https://example.com/custom-redirect',
       language: 'de',
-      typedSignatureEnabled: true,
-      uploadSignatureEnabled: false,
-      drawSignatureEnabled: true,
     },
     distributeDocument: true,
   }),
@@ -480,9 +477,7 @@ const response = await fetch(`${BASE_URL}/template/use`, {
 | `dateFormat`             | string  | Date format string              |
 | `redirectUrl`            | string  | URL to redirect after signing   |
 | `language`               | string  | Document language code          |
-| `typedSignatureEnabled`  | boolean | Allow typed signatures          |
-| `uploadSignatureEnabled` | boolean | Allow uploaded signature images |
-| `drawSignatureEnabled`   | boolean | Allow drawn signatures          |
+Signature method overrides are retained in the API for backwards compatibility but are ignored. Documents created from templates always require a signature drawn by touch, stylus, or mouse.
 
 ---
 

@@ -1,6 +1,6 @@
+import { isBase64Image } from '@documenso/lib/constants/signatures';
 import { parseMessageDescriptor } from '@documenso/lib/utils/i18n';
 import { Dialog, DialogClose, DialogContent, DialogFooter } from '@documenso/ui/primitives/dialog';
-
 import type { MessageDescriptor } from '@lingui/core';
 import { Trans, useLingui } from '@lingui/react/macro';
 import { motion } from 'framer-motion';
@@ -39,7 +39,7 @@ export const SignaturePadDialog = ({
   const { i18n } = useLingui();
 
   const [showSignatureModal, setShowSignatureModal] = useState(false);
-  const [signature, setSignature] = useState<string>(value ?? '');
+  const [signature, setSignature] = useState<string>(value && isBase64Image(value) ? value : '');
 
   return (
     <div

@@ -123,10 +123,10 @@ export const DocumentSigningSignatureField = ({
 
       const isTypedSignature = !value.startsWith('data:image');
 
-      if (isTypedSignature && typedSignatureEnabled === false) {
+      if (isTypedSignature) {
         toast({
           title: _(msg`Error`),
-          description: _(msg`Typed signatures are not allowed. Please draw your signature.`),
+          description: _(msg`Only drawn signatures are allowed. Please draw your signature.`),
           variant: 'destructive',
         });
 

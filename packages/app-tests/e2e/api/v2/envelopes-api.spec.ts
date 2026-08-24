@@ -292,9 +292,10 @@ test.describe('API V2 Envelopes', () => {
       expect(envelope.documentMeta.allowDictateNextSigner).toBe(payload.meta.allowDictateNextSigner);
       expect(envelope.documentMeta.redirectUrl).toBe(payload.meta.redirectUrl);
       expect(envelope.documentMeta.language).toBe(payload.meta.language);
-      expect(envelope.documentMeta.typedSignatureEnabled).toBe(payload.meta.typedSignatureEnabled);
-      expect(envelope.documentMeta.uploadSignatureEnabled).toBe(payload.meta.uploadSignatureEnabled);
-      expect(envelope.documentMeta.drawSignatureEnabled).toBe(payload.meta.drawSignatureEnabled);
+      // Signature method overrides are ignored: all new envelopes are draw-only.
+      expect(envelope.documentMeta.typedSignatureEnabled).toBe(false);
+      expect(envelope.documentMeta.uploadSignatureEnabled).toBe(false);
+      expect(envelope.documentMeta.drawSignatureEnabled).toBe(true);
       expect(envelope.documentMeta.emailReplyTo).toBe(payload.meta.emailReplyTo);
       expect(envelope.documentMeta.emailSettings).toEqual(payload.meta.emailSettings);
 

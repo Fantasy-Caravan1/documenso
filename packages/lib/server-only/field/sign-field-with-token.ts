@@ -12,7 +12,9 @@ import { match } from 'ts-pattern';
 
 import { AUTO_SIGNABLE_FIELD_TYPES } from '../../constants/autosign';
 import { DEFAULT_DOCUMENT_DATE_FORMAT } from '../../constants/date-formats';
+import { isBase64Image } from '../../constants/signatures';
 import { DEFAULT_DOCUMENT_TIME_ZONE } from '../../constants/time-zones';
+import { AppError, AppErrorCode } from '../../errors/app-error';
 import { DOCUMENT_AUDIT_LOG_TYPE } from '../../types/document-audit-logs';
 import type { TRecipientActionAuth } from '../../types/document-auth';
 import {
@@ -51,7 +53,6 @@ export const signFieldWithToken = async ({
   token,
   fieldId,
   value,
-  isBase64,
   userId,
   authOptions,
   requestMetadata,
@@ -188,11 +189,12 @@ export const signFieldWithToken = async ({
   });
 
   const isSignatureField = field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE;
+  const isSignatureImage = isSignatureField && isBase64Image(value);
 
   let customText = !isSignatureField ? value : undefined;
 
-  const signatureImageAsBase64 = isSignatureField && isBase64 ? value : undefined;
-  const typedSignature = isSignatureField && !isBase64 ? value : undefined;
+  const signatureImageAsBase64 = isSignatureImage ? value : undefined;
+  const typedSignature = isSignatureField && !isSignatureImage ? value : undefined;
 
   if (field.type === FieldType.DATE) {
     customText = DateTime.now()
@@ -204,8 +206,10 @@ export const signFieldWithToken = async ({
     throw new Error('Signature field must have a signature');
   }
 
-  if (isSignatureField && documentMeta?.typedSignatureEnabled === false && typedSignature) {
-    throw new Error('Typed signatures are not allowed. Please draw your signature');
+  if (isSignatureField && typedSignature) {
+    throw new AppError(AppErrorCode.INVALID_BODY, {
+      message: 'Only drawn signatures are allowed. Please draw your signature',
+    });
   }
 
   if (field.fieldMeta?.readOnly && !AUTO_SIGNABLE_FIELD_TYPES.includes(field.type)) {

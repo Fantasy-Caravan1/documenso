@@ -69,6 +69,7 @@ export const useRequiredEnvelopeSigningContext = () => {
 export interface EnvelopeSigningProviderProps {
   fullName?: string | null;
   email?: string | null;
+  /** @deprecated Ignored. Every contract requires a fresh drawn signature. */
   signature?: string | null;
   envelopeData: EnvelopeForSigningResponse;
   children: React.ReactNode;
@@ -123,7 +124,6 @@ const prefillDateFields = (data: EnvelopeForSigningResponse): EnvelopeForSigning
 export const EnvelopeSigningProvider = ({
   fullName: initialFullName,
   email: initialEmail,
-  signature: initialSignature,
   envelopeData: initialEnvelopeData,
   children,
 }: EnvelopeSigningProviderProps) => {
@@ -164,35 +164,8 @@ export const EnvelopeSigningProvider = ({
     },
   });
 
-  // Ensure the user signature doesn't show up if it's not allowed.
-  const [signature, setSignature] = useState(
-    (() => {
-      const sig = initialSignature || '';
-      const isBase64 = isBase64Image(sig);
-
-      if (
-        !sig &&
-        (envelope.documentMeta.uploadSignatureEnabled || envelope.documentMeta.drawSignatureEnabled) &&
-        envelopeData.recipientSignature?.signatureImageAsBase64
-      ) {
-        return envelopeData.recipientSignature.signatureImageAsBase64;
-      }
-
-      if (!sig && envelope.documentMeta.typedSignatureEnabled && envelopeData.recipientSignature?.typedSignature) {
-        return envelopeData.recipientSignature.typedSignature;
-      }
-
-      if (isBase64 && (envelope.documentMeta.uploadSignatureEnabled || envelope.documentMeta.drawSignatureEnabled)) {
-        return sig;
-      }
-
-      if (!isBase64 && envelope.documentMeta.typedSignatureEnabled) {
-        return sig;
-      }
-
-      return null;
-    })(),
-  );
+  // Each contract must capture a fresh signature from the drawing canvas.
+  const [signature, setSignature] = useState<string | null>(null);
 
   /**
    * The fields that are still required to be signed by the actual recipient.

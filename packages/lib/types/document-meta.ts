@@ -95,15 +95,15 @@ export const ZDocumentMetaDistributionMethodSchema = z
 
 export const ZDocumentMetaTypedSignatureEnabledSchema = z
   .boolean()
-  .describe('Whether to allow recipients to sign using a typed signature.');
+  .describe('Deprecated. Typed signatures are disabled and this value is ignored.');
 
 export const ZDocumentMetaDrawSignatureEnabledSchema = z
   .boolean()
-  .describe('Whether to allow recipients to sign using a draw signature.');
+  .describe('Drawn signatures are always enabled and this value is ignored.');
 
 export const ZDocumentMetaUploadSignatureEnabledSchema = z
   .boolean()
-  .describe('Whether to allow recipients to sign using an uploaded signature.');
+  .describe('Deprecated. Uploaded signatures are disabled and this value is ignored.');
 
 /**
  * Note: Any updates to this will cause public API changes. You will need to update

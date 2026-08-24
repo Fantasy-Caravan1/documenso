@@ -27,7 +27,7 @@ import { z } from 'zod';
 export type ExtractFieldInsertionValuesOptions = {
   fieldValue: TSignEnvelopeFieldValue;
   field: Field;
-  documentMeta: Pick<TDocumentMeta, 'timezone' | 'dateFormat' | 'typedSignatureEnabled'>;
+  documentMeta: Pick<TDocumentMeta, 'timezone' | 'dateFormat'>;
 };
 
 export const extractFieldInsertionValues = ({
@@ -238,9 +238,9 @@ export const extractFieldInsertionValues = ({
 
       const isBase64 = isBase64Image(value);
 
-      if (documentMeta.typedSignatureEnabled === false && !isBase64) {
+      if (!isBase64) {
         throw new AppError(AppErrorCode.INVALID_BODY, {
-          message: 'Typed signatures are not allowed. Please draw your signature',
+          message: 'Only drawn signatures are allowed. Please draw your signature',
         });
       }
 

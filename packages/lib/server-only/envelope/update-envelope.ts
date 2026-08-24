@@ -7,6 +7,7 @@ import type { DocumentMeta, DocumentVisibility, Prisma, TemplateType } from '@pr
 import { DocumentStatus, EnvelopeType, FolderType, WebhookTriggerEvents } from '@prisma/client';
 import { isDeepEqual } from 'remeda';
 
+import { DRAW_ONLY_SIGNATURE_SETTINGS } from '../../constants/signatures';
 import { TEAM_DOCUMENT_VISIBILITY_MAP } from '../../constants/teams';
 import { AppError, AppErrorCode } from '../../errors/app-error';
 import type { TDocumentAccessAuthTypes, TDocumentActionAuthTypes } from '../../types/document-auth';
@@ -335,6 +336,7 @@ export const updateEnvelope = async ({
         documentMeta: {
           update: {
             ...meta,
+            ...DRAW_ONLY_SIGNATURE_SETTINGS,
             emailSettings: meta?.emailSettings || undefined,
           },
         },

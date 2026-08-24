@@ -101,7 +101,9 @@ const runSettingsFlow = async ({ root }: TEnvelopeEditorSurface, { externalId, i
   const signatureTypesCombobox = getComboboxByLabel(root, 'Allowed Signature Types');
 
   await signatureTypesCombobox.click();
-  await root.getByRole('option', { name: 'Upload' }).click();
+  await expect(root.getByRole('option', { name: 'Draw' })).toBeVisible();
+  await expect(root.getByRole('option', { name: 'Type' })).toHaveCount(0);
+  await expect(root.getByRole('option', { name: 'Upload' })).toHaveCount(0);
   await clickSettingsDialogHeader(root);
 
   await getComboboxByLabel(root, 'Date Format').click();
@@ -382,7 +384,7 @@ const assertEnvelopeSettingsPersistedInDatabase = async ({
   expect(envelope.documentMeta.subject).toBe(TEST_SETTINGS_VALUES.subject);
   expect(envelope.documentMeta.message).toBe(TEST_SETTINGS_VALUES.message);
   expect(envelope.documentMeta.drawSignatureEnabled).toBe(true);
-  expect(envelope.documentMeta.typedSignatureEnabled).toBe(true);
+  expect(envelope.documentMeta.typedSignatureEnabled).toBe(false);
   expect(envelope.documentMeta.uploadSignatureEnabled).toBe(false);
   expect(envelope.documentMeta.emailSettings).toMatchObject(DB_EXPECTED_VALUES.emailSettings);
 

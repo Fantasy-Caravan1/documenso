@@ -18,6 +18,7 @@ import { DateTime } from 'luxon';
 import { match } from 'ts-pattern';
 import { z } from 'zod';
 
+import { isBase64Image } from '../../constants/signatures';
 import { AppError, AppErrorCode } from '../../errors/app-error';
 import { jobs } from '../../jobs/client';
 import { DOCUMENT_AUDIT_LOG_TYPE, RECIPIENT_DIFF_TYPE } from '../../types/document-audit-logs';
@@ -274,15 +275,16 @@ export const createDocumentFromDirectTemplate = async ({
         };
       }
 
-      const { value, isBase64 } = signedFieldValue;
+      const { value } = signedFieldValue;
 
       const isSignatureField =
         templateField.type === FieldType.SIGNATURE || templateField.type === FieldType.FREE_SIGNATURE;
+      const isSignatureImage = isSignatureField && isBase64Image(value);
 
       let customText = !isSignatureField ? value : '';
 
-      const signatureImageAsBase64 = isSignatureField && isBase64 ? value : undefined;
-      const typedSignature = isSignatureField && !isBase64 ? value : undefined;
+      const signatureImageAsBase64 = isSignatureImage ? value : undefined;
+      const typedSignature = isSignatureField && !isSignatureImage ? value : undefined;
 
       if (templateField.type === FieldType.DATE) {
         customText = DateTime.now().setZone(derivedDocumentMeta.timezone).toFormat(derivedDocumentMeta.dateFormat);
@@ -290,6 +292,12 @@ export const createDocumentFromDirectTemplate = async ({
 
       if (isSignatureField && !signatureImageAsBase64 && !typedSignature) {
         throw new Error('Signature field must have a signature');
+      }
+
+      if (isSignatureField && typedSignature) {
+        throw new AppError(AppErrorCode.INVALID_BODY, {
+          message: 'Only drawn signatures are allowed. Please draw your signature',
+        });
       }
 
       return {

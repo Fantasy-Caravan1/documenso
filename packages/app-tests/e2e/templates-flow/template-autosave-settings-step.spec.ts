@@ -128,16 +128,15 @@ test.describe('AutoSave Settings Step - Templates', () => {
     }).toPass();
   });
 
-  test('should autosave the allowed signature types change', async ({ page }) => {
+  test('should keep templates draw-only', async ({ page }) => {
     const { user, template, team } = await setupTemplate(page);
 
     await page.getByRole('button', { name: 'Advanced Options' }).click();
 
     await page.getByRole('combobox').nth(5).click();
-    await page.getByRole('option', { name: 'Draw' }).click();
-    await page.getByRole('option', { name: 'Type' }).click();
-
-    await triggerAutosave(page);
+    await expect(page.getByRole('option', { name: 'Draw' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'Type' })).toHaveCount(0);
+    await expect(page.getByRole('option', { name: 'Upload' })).toHaveCount(0);
 
     await expect(async () => {
       const retrievedTemplate = await getTemplateById({
@@ -149,9 +148,9 @@ test.describe('AutoSave Settings Step - Templates', () => {
         teamId: team.id,
       });
 
-      expect(retrievedTemplate.templateMeta?.drawSignatureEnabled).toBe(false);
+      expect(retrievedTemplate.templateMeta?.drawSignatureEnabled).toBe(true);
       expect(retrievedTemplate.templateMeta?.typedSignatureEnabled).toBe(false);
-      expect(retrievedTemplate.templateMeta?.uploadSignatureEnabled).toBe(true);
+      expect(retrievedTemplate.templateMeta?.uploadSignatureEnabled).toBe(false);
     }).toPass();
   });
 

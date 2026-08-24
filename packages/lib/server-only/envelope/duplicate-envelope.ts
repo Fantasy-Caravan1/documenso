@@ -3,6 +3,7 @@ import { DocumentSource, EnvelopeType, WebhookTriggerEvents } from '@prisma/clie
 import pMap from 'p-map';
 import { omit } from 'remeda';
 
+import { DRAW_ONLY_SIGNATURE_SETTINGS } from '../../constants/signatures';
 import { AppError, AppErrorCode } from '../../errors/app-error';
 import { ZSignatureLevelSchema } from '../../types/signature-level';
 import { mapEnvelopeToWebhookDocumentPayload, ZWebhookDocumentSchema } from '../../types/webhook-payload';
@@ -109,6 +110,7 @@ export const duplicateEnvelope = async ({ id, userId, teamId, overrides }: Dupli
     prisma.documentMeta.create({
       data: {
         ...omit(envelope.documentMeta, ['id']),
+        ...DRAW_ONLY_SIGNATURE_SETTINGS,
         emailSettings: envelope.documentMeta.emailSettings || undefined,
       },
     }),

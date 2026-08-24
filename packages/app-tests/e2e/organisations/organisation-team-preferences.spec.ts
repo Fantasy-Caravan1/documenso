@@ -32,9 +32,6 @@ test('[ORGANISATIONS]: manage document preferences', async ({ page }) => {
   await page.getByRole('combobox').filter({ hasText: 'yyyy-MM-dd hh:mm AM/PM' }).click();
   await page.getByRole('option', { name: 'DD/MM/YYYY', exact: true }).click();
 
-  await page.getByTestId('signature-types-trigger').click();
-  await page.getByRole('option', { name: 'Draw' }).click();
-  await page.getByRole('option', { name: 'Upload' }).click();
   await page.getByTestId('include-sender-details-trigger').click();
   await page.getByRole('option', { name: 'No' }).click();
   await page.getByTestId('include-signing-certificate-trigger').click();
@@ -53,9 +50,9 @@ test('[ORGANISATIONS]: manage document preferences', async ({ page }) => {
   expect(teamSettings.documentDateFormat).toEqual('dd/MM/yyyy');
   expect(teamSettings.includeSenderDetails).toEqual(false);
   expect(teamSettings.includeSigningCertificate).toEqual(false);
-  expect(teamSettings.typedSignatureEnabled).toEqual(true);
+  expect(teamSettings.typedSignatureEnabled).toEqual(false);
   expect(teamSettings.uploadSignatureEnabled).toEqual(false);
-  expect(teamSettings.drawSignatureEnabled).toEqual(false);
+  expect(teamSettings.drawSignatureEnabled).toEqual(true);
 
   // Edit the team settings
   await page.goto(`/t/${team.url}/settings/document`);
@@ -87,9 +84,9 @@ test('[ORGANISATIONS]: manage document preferences', async ({ page }) => {
   expect(updatedTeamSettings.documentDateFormat).toEqual('MM/dd/yyyy');
   expect(updatedTeamSettings.includeSenderDetails).toEqual(false);
   expect(updatedTeamSettings.includeSigningCertificate).toEqual(false);
-  expect(updatedTeamSettings.typedSignatureEnabled).toEqual(true);
+  expect(updatedTeamSettings.typedSignatureEnabled).toEqual(false);
   expect(updatedTeamSettings.uploadSignatureEnabled).toEqual(false);
-  expect(updatedTeamSettings.drawSignatureEnabled).toEqual(false);
+  expect(updatedTeamSettings.drawSignatureEnabled).toEqual(true);
 
   const document = await seedTeamDocumentWithMeta(team);
 
@@ -102,9 +99,9 @@ test('[ORGANISATIONS]: manage document preferences', async ({ page }) => {
   // Confirm the settings have been applied to a newly created document.
   expect(document.visibility).toEqual(DocumentVisibility.EVERYONE);
 
-  expect(documentMeta.typedSignatureEnabled).toEqual(true);
+  expect(documentMeta.typedSignatureEnabled).toEqual(false);
   expect(documentMeta.uploadSignatureEnabled).toEqual(false);
-  expect(documentMeta.drawSignatureEnabled).toEqual(false);
+  expect(documentMeta.drawSignatureEnabled).toEqual(true);
   expect(documentMeta.language).toEqual('pl');
   expect(documentMeta.timezone).toEqual('Europe/London');
   expect(documentMeta.dateFormat).toEqual('MM/dd/yyyy');

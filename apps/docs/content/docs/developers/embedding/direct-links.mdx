@@ -375,25 +375,7 @@ Configure branding in **Settings** > **Branding** or via team settings.
 
 ### Signature Options
 
-Control which signature input methods are available:
-
-```typescript
-const response = await fetch(`${BASE_URL}/template/update`, {
-  method: 'POST',
-  headers: {
-    Authorization: API_TOKEN,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    templateId: 123,
-    meta: {
-      typedSignatureEnabled: true, // Allow typed signatures
-      drawSignatureEnabled: true, // Allow drawn signatures
-      uploadSignatureEnabled: false, // Disable uploaded signatures
-    },
-  }),
-});
-```
+Direct-link documents only accept signatures drawn by touch, stylus, or mouse. Legacy signature-method metadata is ignored.
 
 ### White-labeling
 

@@ -5,6 +5,7 @@ import { prisma } from '@documenso/prisma';
 import { type DocumentDistributionMethod, type DocumentSigningOrder, EnvelopeType } from '@prisma/client';
 
 import type { SupportedLanguageCodes } from '../../constants/i18n';
+import { DRAW_ONLY_SIGNATURE_SETTINGS } from '../../constants/signatures';
 import { AppError, AppErrorCode } from '../../errors/app-error';
 import type { TDocumentEmailSettings } from '../../types/document-email';
 import type { EnvelopeIdOptions } from '../../utils/envelope';
@@ -50,9 +51,6 @@ export const updateDocumentMeta = async ({
   emailReplyTo,
   emailSettings,
   distributionMethod,
-  typedSignatureEnabled,
-  uploadSignatureEnabled,
-  drawSignatureEnabled,
   language,
   requestMetadata,
 }: CreateDocumentMetaOptions) => {
@@ -129,9 +127,7 @@ export const updateDocumentMeta = async ({
         emailReplyTo,
         emailSettings,
         distributionMethod,
-        typedSignatureEnabled,
-        uploadSignatureEnabled,
-        drawSignatureEnabled,
+        ...DRAW_ONLY_SIGNATURE_SETTINGS,
         language,
       },
     });
