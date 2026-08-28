@@ -275,7 +275,7 @@ export const createDocumentFromDirectTemplate = async ({
         };
       }
 
-      const { value } = signedFieldValue;
+      const value = signedFieldValue.value ?? '';
 
       const isSignatureField =
         templateField.type === FieldType.SIGNATURE || templateField.type === FieldType.FREE_SIGNATURE;
@@ -291,7 +291,9 @@ export const createDocumentFromDirectTemplate = async ({
       }
 
       if (isSignatureField && !signatureImageAsBase64 && !typedSignature) {
-        throw new Error('Signature field must have a signature');
+        throw new AppError(AppErrorCode.INVALID_BODY, {
+          message: 'Signature field must have a signature',
+        });
       }
 
       if (isSignatureField && typedSignature) {
