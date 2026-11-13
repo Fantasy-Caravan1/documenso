@@ -301,6 +301,12 @@ export const SSH_STUB = String.raw`#!/usr/bin/env bash
 while [ "$1" = -o ]; do shift 2; done
 host="$1"; shift
 printf 'local ssh %s %s\n' "$host" "$(printf '%s' "$*" | head -c 80 | tr '\n' ' ')" >> "$HARNESS_ROOT/calls.log"
+if [ "$*" = 'cat > /dev/null' ] && [ -f "$HARNESS_ROOT/ssh-slow" ]; then
+  # A shaped link: the probe never finishes in time. The pid is left for the
+  # test to check that the probe was ended.
+  echo $$ > "$HARNESS_ROOT/probe-pid"
+  exec sleep 30
+fi
 if [ "$*" = true ]; then
   [ -f "$HARNESS_ROOT/ssh-down" ] && exit 255
   exit 0

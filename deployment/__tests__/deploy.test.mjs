@@ -104,6 +104,9 @@ const setup = (opts = {}) => {
   if (opts.sshDown) {
     writeFileSync(join(root, 'ssh-down'), '');
   }
+  if (opts.sshSlow) {
+    writeFileSync(join(root, 'ssh-slow'), '');
+  }
   const fresh = Boolean(opts.fresh);
   const remoteState = {
     next: 1,
@@ -141,7 +144,7 @@ const setup = (opts = {}) => {
 
 const run = (h, { args = ['production'], env = {} } = {}) => {
   const base = { ...process.env };
-  for (const k of ['SSH_HOST', 'SHIP', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE', 'BUILD_NODE_HEAP_MB', 'FIRST_RELEASE', 'ALLOW_EMPTY_DATABASE']) {
+  for (const k of ['SSH_HOST', 'SHIP', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE', 'BUILD_NODE_HEAP_MB', 'FIRST_RELEASE', 'ALLOW_EMPTY_DATABASE', 'SSH_PROBE_MB', 'SSH_PROBE_SECONDS']) {
     delete base[k];
   }
   const r = spawnSync('bash', [join(h.work, 'deployment', 'deploy.sh'), ...args], {
@@ -159,6 +162,8 @@ const run = (h, { args = ['production'], env = {} } = {}) => {
       HEALTH_INTERVAL: '0',
       DB_HEALTH_RETRIES: '2',
       DB_HEALTH_INTERVAL: '0',
+      SSH_PROBE_MB: '1',
+      SSH_PROBE_SECONDS: '2',
       ...env,
     },
   });
@@ -400,31 +405,34 @@ test('preflight order: local docker, ssh, host checks, then build', () => {
   assert.equal(r.status, 0, r.out);
   const info = at(r, 'local docker info');
   const ssh = at(r, 'local ssh deploy-target true');
+  const probe = at(r, 'local ssh deploy-target cat > /dev/null');
   const ps = at(r, 'remote docker compose');
   const df = at(r, 'df -BG');
   const build = at(r, 'local docker build');
-  assert.ok(info >= 0 && ssh > info && ps > ssh && df > ps && build > df, r.calls);
+  assert.ok(info >= 0 && ssh > info && probe > ssh && ps > probe && df > ps && build > df, r.calls);
   cleanup(h);
 });
 
 // -- Transport ------------------------------------------------------------------
 
-test('without registry set-up the image goes over ssh: save, gzip, load', () => {
+test('fast ssh upload, no registry set-up: the image goes over ssh (save, gzip, load)', () => {
   const h = setup();
   const r = run(h);
   assert.equal(r.status, 0, r.out);
-  assert.match(r.out, /travels by ssh \(this machine is not set up for the registry/);
+  assert.match(r.out, /travels by ssh \(ssh upload is fast: 1 MB sent in about [0-9.]+s \(limit 2s\)\)/);
+  assert.match(r.out, /If this crawls, stop it \(Ctrl-C\) and re-run with SHIP=registry/);
   assert.ok(has(r, 'local docker save documenso-fantasy:'), r.calls);
   assert.ok(has(r, 'remote docker load'), r.calls);
   assert.ok(!has(r, 'docker push') && !has(r, 'docker pull') && !has(r, 'docker-login'), r.calls);
   cleanup(h);
 });
 
-test('with registry set-up: checks the repository, pushes, host pulls with a temporary login', () => {
-  const h = setup({ registry: true });
+// Was "registry set-up means registry"; since the probe, it takes a slow link too.
+test('slow ssh upload + registry set-up: checks the repository, pushes, host pulls with a temporary login', () => {
+  const h = setup({ registry: true, sshSlow: true });
   const r = run(h);
   assert.equal(r.status, 0, r.out);
-  assert.match(r.out, /travels by registry \(this machine is set up for it\)/);
+  assert.match(r.out, /travels by registry \(ssh upload is slow \(1 MB not sent within 2s\) and this machine is set up for the registry\)/);
   assert.match(r.out, /Registry harnessorg\/documenso is private and the pull token reads it/);
   const anon = at(r, 'local curl -sS --max-time 20 -o /dev/null');
   const build = at(r, 'local docker build');
@@ -447,6 +455,7 @@ test('SHIP=ssh overrides a machine set up for the registry', () => {
   const r = run(h, { env: { SHIP: 'ssh' } });
   assert.equal(r.status, 0, r.out);
   assert.ok(has(r, 'local docker save'), r.calls);
+  assert.ok(!has(r, 'cat > /dev/null'), 'no probe when SHIP is set');
   assert.ok(!has(r, 'hub.docker.com'), 'no registry checks on the ssh path');
   cleanup(h);
 });
@@ -470,7 +479,7 @@ test('an unknown SHIP is refused', () => {
 });
 
 test('registry checks: a public repository is refused before building', () => {
-  const h = setup({ registry: true, scenario: { hub: { anon: 200 } } });
+  const h = setup({ registry: true, sshSlow: true, scenario: { hub: { anon: 200 } } });
   const r = run(h);
   assert.equal(r.status, 1);
   assert.match(r.out, /BLOCKED: harnessorg\/documenso on Docker Hub is public/);
@@ -479,7 +488,7 @@ test('registry checks: a public repository is refused before building', () => {
 });
 
 test('registry checks: a token file readable by others is refused', () => {
-  const h = setup({ registry: true, tokenMode: 0o644 });
+  const h = setup({ registry: true, sshSlow: true, tokenMode: 0o644 });
   const r = run(h);
   assert.equal(r.status, 1);
   assert.match(r.out, /BLOCKED: .*dockerhub-pull-token is mode 644; it must be 600/);
@@ -488,7 +497,7 @@ test('registry checks: a token file readable by others is refused', () => {
 });
 
 test('registry checks: a refused pull token is BLOCKED', () => {
-  const h = setup({ registry: true, scenario: { hub: { login: 401 } } });
+  const h = setup({ registry: true, sshSlow: true, scenario: { hub: { login: 401 } } });
   const r = run(h);
   assert.equal(r.status, 1);
   assert.match(r.out, /BLOCKED: Docker Hub refused the pull token for user harnessorg \(status 401\)/);
@@ -497,7 +506,7 @@ test('registry checks: a refused pull token is BLOCKED', () => {
 });
 
 test('registry checks: a missing repository is BLOCKED (a push would create it public)', () => {
-  const h = setup({ registry: true, scenario: { hub: { repo: 404 } } });
+  const h = setup({ registry: true, sshSlow: true, scenario: { hub: { repo: 404 } } });
   const r = run(h);
   assert.equal(r.status, 1);
   assert.match(r.out, /BLOCKED: harnessorg\/documenso does not exist on Docker Hub/);
@@ -506,7 +515,7 @@ test('registry checks: a missing repository is BLOCKED (a push would create it p
 });
 
 test('registry checks: a repository reported not private is BLOCKED', () => {
-  const h = setup({ registry: true, scenario: { hub: { private: false } } });
+  const h = setup({ registry: true, sshSlow: true, scenario: { hub: { private: false } } });
   const r = run(h);
   assert.equal(r.status, 1);
   assert.match(r.out, /BLOCKED: harnessorg\/documenso on Docker Hub is not private/);
@@ -958,5 +967,74 @@ test('the existing-host release never asks the database with psql and never star
   assert.equal(r.status, 0, r.out);
   assert.ok(!has(r, 'psql'), r.calls);
   assert.ok(!has(r, 'up -d database'), r.calls);
+  cleanup(h);
+});
+
+// -- Transport probe --------------------------------------------------------------
+
+test('fast ssh upload wins over a registry set-up', () => {
+  const h = setup({ registry: true });
+  const r = run(h);
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /travels by ssh \(ssh upload is fast/);
+  assert.ok(has(r, 'local docker save'), r.calls);
+  assert.ok(!has(r, 'docker push') && !has(r, 'hub.docker.com'), 'no registry use at all');
+  cleanup(h);
+});
+
+test('slow ssh upload and no registry: BLOCKED before any build, push or save; probe ended', () => {
+  const h = setup({ sshSlow: true });
+  const r = run(h);
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: the ssh upload to deploy-target is slow \(1 MB not sent within 2s\), and this machine is not set up for the registry:/);
+  assert.match(r.out, /missing .*dockerhub-repo/);
+  assert.match(r.out, /SHIP=ssh deployment\/deploy.sh production/);
+  assert.ok(!has(r, 'docker build') && !has(r, 'docker push') && !has(r, 'docker save'), r.calls);
+  assert.ok(!has(r, 'remote docker'), 'the host is not touched');
+  const pid = Number(readFileSync(join(h.root, 'probe-pid'), 'utf8'));
+  assert.ok(pid > 0);
+  assert.throws(() => process.kill(pid, 0), 'the probe process is gone');
+  cleanup(h);
+});
+
+test('explicit SHIP=registry does not probe', () => {
+  const h = setup({ registry: true });
+  const r = run(h, { env: { SHIP: 'registry' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /travels by registry \(SHIP=registry\)/);
+  assert.ok(!has(r, 'cat > /dev/null'), r.calls);
+  cleanup(h);
+});
+
+test('SHIP=ssh on a slow link ships anyway, without probing', () => {
+  const h = setup({ sshSlow: true });
+  const r = run(h, { env: { SHIP: 'ssh' } });
+  assert.equal(r.status, 0, r.out);
+  assert.ok(!has(r, 'cat > /dev/null'), r.calls);
+  assert.ok(has(r, 'local docker save'), r.calls);
+  cleanup(h);
+});
+
+test('SSH_PROBE_MB and SSH_PROBE_SECONDS must be whole numbers', () => {
+  const h = setup();
+  let r = run(h, { env: { SSH_PROBE_MB: '8M' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: SSH_PROBE_MB must be a whole number, not '8M'/);
+  r = run(h, { env: { SSH_PROBE_SECONDS: '1.5' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: SSH_PROBE_SECONDS must be a whole number, not '1.5'/);
+  r = run(h, { env: { SSH_PROBE_SECONDS: '0' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: SSH_PROBE_SECONDS must be at least 1/);
+  assert.equal(r.calls, '');
+  cleanup(h);
+});
+
+test('first release: the probe runs before the database is started', () => {
+  const h = setup({ fresh: true, sshSlow: true });
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /ssh upload to deploy-target is slow/);
+  assert.ok(!r.calls.includes(' up '), 'a slow link with no registry stops before the database starts');
   cleanup(h);
 });

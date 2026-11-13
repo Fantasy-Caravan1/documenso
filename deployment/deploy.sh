@@ -78,6 +78,9 @@ FIRST_RELEASE="${FIRST_RELEASE:-0}"
 ALLOW_EMPTY_DATABASE="${ALLOW_EMPTY_DATABASE:-0}"
 DB_HEALTH_RETRIES="${DB_HEALTH_RETRIES:-30}"
 DB_HEALTH_INTERVAL="${DB_HEALTH_INTERVAL:-5}"
+# The ssh upload probe that picks the transport when SHIP is not set.
+SSH_PROBE_MB="${SSH_PROBE_MB:-8}"
+SSH_PROBE_SECONDS="${SSH_PROBE_SECONDS:-8}"
 
 say() { printf '\n==> %s\n' "$1"; }
 blocked() { echo "BLOCKED: $1" >&2; exit 1; }
@@ -95,7 +98,8 @@ INT_FORMAT='^[0-9]+$'
 for pair in "BACKUP_KEEP=$BACKUP_KEEP" "MIN_FREE_GB=$MIN_FREE_GB" "APP_PORT=$APP_PORT" \
             "HEALTH_RETRIES=$HEALTH_RETRIES" "HEALTH_INTERVAL=$HEALTH_INTERVAL" \
             "BUILD_NODE_HEAP_MB=$BUILD_NODE_HEAP_MB" "DB_HEALTH_RETRIES=$DB_HEALTH_RETRIES" \
-            "DB_HEALTH_INTERVAL=$DB_HEALTH_INTERVAL"; do
+            "DB_HEALTH_INTERVAL=$DB_HEALTH_INTERVAL" "SSH_PROBE_MB=$SSH_PROBE_MB" \
+            "SSH_PROBE_SECONDS=$SSH_PROBE_SECONDS"; do
   [[ "${pair#*=}" =~ $INT_FORMAT ]] || blocked "${pair%%=*} must be a whole number, not '${pair#*=}'."
 done
 [ "$BACKUP_KEEP" -ge 1 ] || blocked "BACKUP_KEEP must be at least 1."
@@ -105,6 +109,8 @@ case "$MIGRATION_PREVIEW" in 0|1) ;; *) blocked "MIGRATION_PREVIEW must be 0 or 
 case "$FIRST_RELEASE" in 0|1) ;; *) blocked "FIRST_RELEASE must be 0 or 1." ;; esac
 case "$ALLOW_EMPTY_DATABASE" in 0|1) ;; *) blocked "ALLOW_EMPTY_DATABASE must be 0 or 1." ;; esac
 [ "$DB_HEALTH_RETRIES" -ge 1 ] || blocked "DB_HEALTH_RETRIES must be at least 1."
+[ "$SSH_PROBE_MB" -ge 1 ] || blocked "SSH_PROBE_MB must be at least 1."
+[ "$SSH_PROBE_SECONDS" -ge 1 ] || blocked "SSH_PROBE_SECONDS must be at least 1."
 if [ "$ALLOW_EMPTY_DATABASE" = 1 ] && [ "$FIRST_RELEASE" != 1 ]; then
   blocked "ALLOW_EMPTY_DATABASE=1 only means something with FIRST_RELEASE=1."
 fi
@@ -167,20 +173,16 @@ case "${SHIP:-}" in
     SHIP_WHY="SHIP=ssh"
     ;;
   "")
-    if [ -z "$MISSING" ]; then
-      SHIP_VIA=registry
-      SHIP_WHY="this machine is set up for it"
-    else
-      SHIP_VIA=ssh
-      SHIP_WHY="this machine is not set up for the registry (missing:$MISSING); deployment/README.md says how"
-    fi
+    # Decided by measurement once ssh is known to work: see probe_ssh below.
+    SHIP_VIA=auto
+    SHIP_WHY=""
     ;;
   *)
     blocked "SHIP must be 'registry' or 'ssh', not '$SHIP'."
     ;;
 esac
 
-echo "Releasing $VERSION ($SHA) to $ENVIRONMENT; image travels by $SHIP_VIA ($SHIP_WHY)."
+echo "Releasing $VERSION ($SHA) to $ENVIRONMENT."
 if [ "$FIRST_RELEASE" = 1 ]; then
   echo "FIRST RELEASE: no app container is expected on the host, and there will be nothing to roll back to."
 fi
@@ -203,6 +205,59 @@ fi
 
 ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" true 2>/dev/null \
   || blocked "cannot reach $SSH_HOST over ssh (BatchMode, 15s timeout). Check the host, your key and ~/.ssh/config."
+
+# -- Which way, measured ------------------------------------------------------
+# Three places this runs from, and the link decides, not the machine:
+#   away from the office   ssh upload is fast      -> ssh pipe
+#   in the office          port 22 is shaped (40 KB/s measured against 7.4 MB/s
+#                          over HTTPS, 2026-11-10)  -> registry
+#   an AWS host on the target's private network     -> ssh pipe, fast
+# So without SHIP, a few MB of incompressible data go up the ssh link first.
+# Done inside the limit = fast. The probe is a background job killed at the
+# limit: macOS has no `timeout`, and this has to run on bash 3.2 and on Linux.
+probe_ssh() {
+  local bytes=$(( SSH_PROBE_MB * 1024 * 1024 )) ticks=0 limit=$(( SSH_PROBE_SECONDS * 10 )) pid rc
+  head -c "$bytes" /dev/urandom 2>/dev/null \
+    | ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" 'cat > /dev/null' >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$ticks" -ge "$limit" ]; then
+      # Killing ssh ends the pipe; head dies on its next write.
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      PROBE_RESULT="$SSH_PROBE_MB MB not sent within ${SSH_PROBE_SECONDS}s"
+      return 1
+    fi
+    sleep 0.1
+    ticks=$(( ticks + 1 ))
+  done
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  if [ "$rc" != 0 ]; then
+    PROBE_RESULT="the probe upload failed (ssh exit $rc)"
+    return 1
+  fi
+  PROBE_RESULT="$SSH_PROBE_MB MB sent in about $(( ticks / 10 )).$(( ticks % 10 ))s (limit ${SSH_PROBE_SECONDS}s)"
+  return 0
+}
+
+if [ "$SHIP_VIA" = auto ]; then
+  say "Measuring the ssh upload to $SSH_HOST ($SSH_PROBE_MB MB of random data, ${SSH_PROBE_SECONDS}s limit)"
+  if probe_ssh; then
+    SHIP_VIA=ssh
+    SHIP_WHY="ssh upload is fast: $PROBE_RESULT"
+  elif [ -z "$MISSING" ]; then
+    SHIP_VIA=registry
+    SHIP_WHY="ssh upload is slow ($PROBE_RESULT) and this machine is set up for the registry"
+  else
+    echo "BLOCKED: the ssh upload to $SSH_HOST is slow ($PROBE_RESULT), and this machine is not set up for the registry:" >&2
+    for f in $MISSING; do echo "  missing $f" >&2; done
+    echo "  Either set up the registry (deployment/README.md, \"镜像仓库\"), or, knowing the image is" >&2
+    echo "  over a GB and the link is slow, ship over ssh anyway: SHIP=ssh deployment/deploy.sh production" >&2
+    exit 1
+  fi
+fi
+echo "The image travels by $SHIP_VIA ($SHIP_WHY)."
 
 # Values travel as environment variables in front of `bash -s`, never as
 # arguments to the script, and the script itself arrives on stdin: there is no
@@ -362,6 +417,7 @@ if [ "$SHIP_VIA" = registry ]; then
   PULL_TOKEN=""
 else
   say "[2/4] Ship the image over ssh as a gzipped tarball ($SHIP_WHY)"
+  echo "  A shaped link can start fast and then slow down. If this crawls, stop it (Ctrl-C) and re-run with SHIP=registry."
   # Piped end to end: the tarball never lands on either disk. The whole image
   # goes every time, and port 22 from the office is shaped to tens of KB/s, so
   # the meter is what tells a slow pipe from a hung one. It reads the

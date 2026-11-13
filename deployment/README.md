@@ -31,9 +31,9 @@ SSH_HOST=<ssh 目标或别名> deployment/deploy.sh production
 
 没有默认值。两处都没有时脚本 BLOCKED 并提示怎么配。ssh 要能免密码登录（脚本用 `BatchMode=yes`），登录用户要能用 docker、能写 `BACKUP_DIR`。
 
-### 2. 镜像仓库（推荐）
+### 2. 镜像仓库（在公司发布时需要）
 
-办公网对 22 端口上行限速（实测 ssh 40 KB/s，HTTPS 7.4 MB/s），Documenso 镜像有 1 GB 量级，走 ssh 管道要几个小时。所以默认走 Docker Hub 私有仓库：
+办公网对 22 端口上行限速（实测 ssh 40 KB/s，HTTPS 7.4 MB/s），Documenso 镜像有 1 GB 量级，从公司走 ssh 管道要几个小时。所以在公司发布需要 Docker Hub 私有仓库：
 
 1. 在 Docker Hub 上**先**建一个**私有**仓库（push 到不存在的仓库会自动建成公开的，脚本会拦下这种情况，但别依赖它）。
 2. 开发机 `docker login`，用能 push 的 token。
@@ -45,7 +45,23 @@ printf '%s\n' '<只读 token>' > ~/.config/fantasy-documenso/dockerhub-pull-toke
 chmod 600 ~/.config/fantasy-documenso/dockerhub-pull-token
 ```
 
-pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定。两份文件都在时自动走仓库；缺任何一份就走 ssh 管道。`SHIP=registry` / `SHIP=ssh` 可以强制指定。
+pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定。传输方式怎么选见下一节。
+
+### 3. 传输方式：按实测选
+
+没设 `SHIP` 时，脚本在确认 ssh 能连上之后、做任何构建之前，往目标主机的 `cat > /dev/null` 送 `SSH_PROBE_MB`（默认 8）MB 的 `/dev/urandom` 数据（不可压缩，ssh 的压缩帮不上忙），限时 `SSH_PROBE_SECONDS`（默认 8）秒：
+
+- 限时内送完算**快** → 走 ssh 管道，即使仓库配置齐全也一样。
+- 没送完（探测进程被结束）或 ssh 出错算**慢** → 仓库配置齐全就走仓库；没配置仓库就在构建前 BLOCKED。
+
+显式的 `SHIP=registry` / `SHIP=ssh` 优先，这时不测速。脚本会打印选了哪种、依据是什么。走 ssh 管道时还会提醒：限速可能先快后慢，传得很慢可以 Ctrl-C，带 `SHIP=registry` 重跑。
+
+三种情况：
+
+- **不在公司**（家里、外面）：ssh 上行正常，测速判快，走 ssh 管道。不用配仓库。
+- **在公司**：22 端口被限速，测速判慢，走 Docker Hub 仓库，需要先按上一节配好。没配就 BLOCKED。
+- **从和目标同一内网的 AWS 主机发**：`SSH_HOST` 用目标的内网地址，测速判快，走 ssh 管道（内网 scp 级速度）。那台主机是 x86_64，构建是原生的、不经模拟（上游说约两分钟），`docker info` 的内存检查取到的是整机内存，逻辑照样成立。前提：那台主机要有 docker（含 buildx）、git、perl，有 `fantasy-production-overlay` 的干净 checkout，并且能 ssh 到目标、在目标上直接用 docker。脚本没有只在 macOS 上成立的写法（`stat` 先试 GNU 形式，测速用后台进程加 kill，不依赖 `timeout`）。
+
 
 ## 发布前
 
@@ -64,9 +80,10 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 | 2 | 工作区干净 | 开发机 |
 | 3 | `git fetch origin` 后 HEAD 等于 `origin/fantasy-production-overlay` | 开发机 |
 | 4 | 有目标主机（`SSH_HOST` 或 `ssh-host` 文件），格式合法 | 开发机 |
-| 5 | 选传输方式（仓库 / ssh） | 开发机 |
+| 5 | `SHIP` 取值；`SHIP=registry` 时仓库配置文件都在 | 开发机 |
 | 6 | 本机 docker 可用（`docker info`）；Docker 内存 ≥ `BUILD_NODE_HEAP_MB` + 2048 MB | 开发机 |
 | 7 | ssh 能连（BatchMode，15 秒超时） | 开发机 |
+| 7a | 没设 `SHIP` 时测 ssh 上行速度并选传输方式；慢且没配仓库就 BLOCKED。在服务器端预检之前，所以 `FIRST_RELEASE=1` 时也在起数据库、查空库之前 | 开发机 → 服务器 |
 | 8 | `REMOTE_DIR`、compose 文件、env 文件存在；docker 可用 | 服务器（`MODE=preflight`） |
 | 9 | 应用容器：没设 `FIRST_RELEASE` 时必须存在且恰好一个在运行；设了 `FIRST_RELEASE=1` 时必须不存在 | 服务器 |
 | 9a | `database`：在运行 → 通过；容器在但停着 → BLOCKED（不替人启动）；容器没了但卷 `<项目名>_database` 还在 → BLOCKED（给只起数据库的命令）；容器和卷都没有 → 没设 `FIRST_RELEASE` 时 BLOCKED，设了则留到第 12a 步启动 | 服务器 |
@@ -128,7 +145,9 @@ git archive <commit> | docker build --platform linux/amd64 \
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `SSH_HOST` | 无（读 `~/.config/fantasy-documenso/ssh-host`） | ssh 目标或别名 |
-| `SHIP` | 自动 | `registry` 或 `ssh` |
+| `SHIP` | 自动（测速） | `registry` 或 `ssh`；设了就不测速 |
+| `SSH_PROBE_MB` | `8` | 测速送多少 MB（整数，≥ 1） |
+| `SSH_PROBE_SECONDS` | `8` | 测速限时秒数（整数，≥ 1） |
 | `REGISTRY_USER` | 仓库名斜杠前的部分 | pull token 所属账号 |
 | `REMOTE_DIR` | `/opt/apps/Perri/documenso/documenso` | 服务器上 Documenso checkout，compose 命令在这里执行 |
 | `COMPOSE_FILE` | `docker/production/compose.yml` | 相对 `REMOTE_DIR` |
@@ -162,6 +181,8 @@ git archive <commit> | docker build --platform linux/amd64 \
 | `BLOCKED: no target host` | 配 `SSH_HOST` 或 `ssh-host` 文件 |
 | `BLOCKED: SSH_HOST is not an ssh destination` | 主机名里有不允许的字符 |
 | `BLOCKED: SHIP=registry, but the set-up is missing` / `SHIP must be …` | 仓库配置文件缺失 / SHIP 取值不对 |
+| `BLOCKED: the ssh upload to … is slow (…), and this machine is not set up for the registry:` | ssh 上行太慢又没配仓库。配好 `~/.config/fantasy-documenso/dockerhub-repo` 和 `dockerhub-pull-token`，或明知很慢仍走 ssh：`SHIP=ssh deployment/deploy.sh production` |
+| `BLOCKED: SSH_PROBE_MB / SSH_PROBE_SECONDS must be a whole number …` / `… at least 1` | 测速参数不对 |
 | `BLOCKED: docker is not running on this machine` | 启动 Docker Desktop |
 | `BLOCKED: Docker has N MB of memory; the build needs BUILD_NODE_HEAP_MB (…) + 2048 MB.` | 调大 Docker Desktop 内存，或调小 `BUILD_NODE_HEAP_MB` |
 | `BLOCKED: cannot reach … over ssh` | 主机、密钥、`~/.ssh/config` |
@@ -325,3 +346,4 @@ bash -n deployment/deploy.sh deployment/deploy-remote.sh
 - Docker Hub 仓库是否已建、是否私有。
 - 服务器上的 `docker compose` 版本是否支持 `ps --status`、`config --images`（Compose v2 都支持）。
 - ssh 连接在发布中途断开时：脚本已整体读入后才执行，自动回滚靠 bash 的 EXIT trap；断在 `up` 之后、健康检查之前时是否能完整回滚，没有在真机上验证过。
+- 测速的默认值（8 MB / 8 秒，即约 1 MB/s 以上算快）是按“公司 40 KB/s、外面和内网远快于此”定的；限速若先放行一段再收紧，8 MB 可能测不出来，这时按 ssh 管道开始时的提示中断后带 `SHIP=registry` 重跑，或调大 `SSH_PROBE_MB`。
