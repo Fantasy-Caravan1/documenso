@@ -149,6 +149,8 @@ if [ -z "$SSH_HOST" ]; then
   echo "    mkdir -p $CONFIG_DIR && echo '<ssh host or ~/.ssh/config alias>' > $HOST_FILE" >&2
   exit 1
 fi
+# An ~/.ssh/config alias (with ProxyJump, say), user@host, a name or an IP.
+# No whitespace, quotes or '$': the value goes into commands and messages.
 HOST_FORMAT='^[A-Za-z0-9_][A-Za-z0-9._@:-]*$'
 [[ "$SSH_HOST" =~ $HOST_FORMAT ]] || blocked "SSH_HOST is not an ssh destination (letters, digits, '.', '_', '-', '@', ':' only)."
 
@@ -203,8 +205,13 @@ if [ "${DOCKER_MEM:-0}" -lt "$NEED_MEM" ]; then
   exit 1
 fi
 
-ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" true 2>/dev/null \
-  || blocked "cannot reach $SSH_HOST over ssh (BatchMode, 15s timeout). Check the host, your key and ~/.ssh/config."
+if ! ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" true 2>/dev/null; then
+  echo "BLOCKED: cannot reach $SSH_HOST over ssh (BatchMode, 15s timeout). Check the host, your key and ~/.ssh/config." >&2
+  echo "  The production server does not open port 22 to the outside: use an ~/.ssh/config alias with" >&2
+  echo "  ProxyJump through the development server, or run this on the development server itself" >&2
+  echo "  (deployment/README.md, \"目标拓扑\")." >&2
+  exit 1
+fi
 
 # -- Which way, measured ------------------------------------------------------
 # Three places this runs from, and the link decides, not the machine:

@@ -29,7 +29,49 @@ echo '<ssh 目标或别名>' > ~/.config/fantasy-documenso/ssh-host
 SSH_HOST=<ssh 目标或别名> deployment/deploy.sh production
 ```
 
-没有默认值。两处都没有时脚本 BLOCKED 并提示怎么配。ssh 要能免密码登录（脚本用 `BatchMode=yes`），登录用户要能用 docker、能写 `BACKUP_DIR`。
+没有默认值。两处都没有时脚本 BLOCKED 并提示怎么配。可以填 `~/.ssh/config` 里的别名（例如带 `ProxyJump` 的，见下面“目标拓扑”）、`user@host`、主机名或 IP；不能含空白、引号或 `$`。ssh 要能免密码登录（脚本用 `BatchMode=yes`），登录用户要能用 docker、能写 `BACKUP_DIR`。
+
+### 目标拓扑：生产服务器不对外开放 ssh
+
+计划中的布局：
+
+- **生产服务器**（新机器）：跑 Documenso，以及 ERP 和 club 的生产容器。22 端口不对外开放。和开发服务器在同一内网。前提：它仍能出网，可以从 Docker Hub 拉 `postgres:15`，走仓库传输时也能从私有仓库拉镜像。
+- **开发服务器**：可以从外面 ssh，跑 ERP 和 club 的 staging。
+- 到生产服务器的登录和文件传输都经过开发服务器。有两种走法。
+
+**走法一：从开发机经跳板。** 在开发机的 `~/.ssh/config` 里给生产服务器配一个别名，`HostName` 写它的内网地址，`ProxyJump` 指向开发服务器：
+
+```sshconfig
+Host <开发服务器别名>
+    HostName <开发服务器的公网地址或域名>
+    User <用户>
+    IdentityFile ~/.ssh/<密钥>
+
+Host <生产服务器别名>
+    HostName <生产服务器的内网地址>
+    User <用户>
+    IdentityFile ~/.ssh/<密钥>
+    ProxyJump <开发服务器别名>
+```
+
+然后把 `SSH_HOST`（或 `~/.config/fantasy-documenso/ssh-host`）填成 `<生产服务器别名>`。脚本照常 `ssh <别名>`，不需要知道跳板的存在。拷证书、`.env.production`、备份时用 `scp`，同样写这个别名。
+
+测速逻辑不变。经跳板时，瓶颈是开发机到开发服务器这一段（内网那一段快得多），测速量到的就是这一段，所以“在公司走仓库、在外面走 ssh”的结论照样成立。
+
+**走法二：直接在开发服务器上发。** 在开发服务器上放一份 `fantasy-production-overlay` 的干净 checkout，在那里运行 `deployment/deploy.sh production`，`SSH_HOST` 填生产服务器的内网地址或别名。好处：
+
+- 构建是原生 x86，不经模拟；
+- 传输走内网，测速会判快，自动走 ssh 管道；
+- 不依赖开发机的网络。
+
+前提见上面“传输方式”一节里同内网主机那一条。
+
+两种走法都连不上时，脚本的 BLOCKED 提示会提醒：生产服务器不对外开放 22 端口，要用带 `ProxyJump` 的别名，或在开发服务器上运行。
+
+**待设计（搬迁前必须解决，本次不改 compose、不定方案）**：Documenso 搬到生产服务器后，staging 的 ERP 在另一台主机（开发服务器）上。现在 compose 只把应用发布在 `127.0.0.1:3010`，同主机的 ERP 靠 Docker 网络 `documenso-production_default` 直连。下面两件事都需要另行设计：
+
+- 跨主机的 staging ERP 怎么访问 Documenso 的 API；
+- Documenso 回调 staging ERP 用什么地址，涉及 webhook URL 和 SSRF bypass 设置。
 
 ### 2. 镜像仓库（在公司发布时需要）
 
@@ -232,7 +274,16 @@ git archive <commit> | docker build --platform linux/amd64 \
 - 签名证书 `/opt/documenso/cert.p12`，即 compose 里挂载的路径。首次发布会检查 compose 文件里挂载的宿主机路径是否存在。这一步读的是 compose 文件原文，不是 `docker compose config`，所以不会打印 env 的值。
 - `BACKUP_DIR` 能写。
 
-证书、`.env.production`、数据库备份这几样文件，从旧服务器经内网 scp 到新服务器最快。
+证书、`.env.production`、数据库备份这几样文件，从旧服务器经内网 scp 到新服务器最快。新服务器不对外开放 ssh 时，用“目标拓扑”里配的别名（经开发服务器跳板）。在开发机上通过两个别名中转：
+
+```bash
+# <旧服务器别名>、<生产服务器别名> 都是 ~/.ssh/config 里的别名；后者带 ProxyJump
+scp -3 <旧服务器别名>:/opt/apps/Perri/documenso/documenso/.env.production \
+       <生产服务器别名>:/opt/apps/Perri/documenso/documenso/.env.production
+scp -3 <旧服务器别名>:/opt/documenso/cert.p12 <生产服务器别名>:/tmp/cert.p12   # 再在生产服务器上放到 /opt/documenso/ 并设好权限
+```
+
+或者在能同时 ssh 到两台机器的开发服务器上直接 `scp`，走内网，最快。传完检查两个文件的权限：`.env.production` 和证书都只给需要的用户读。
 
 ### 2. 搬数据（新建实例时跳过，改用 `ALLOW_EMPTY_DATABASE=1`）
 
@@ -246,7 +297,13 @@ docker exec documenso-production-database-1 sh -c 'exec pg_dump -U "$POSTGRES_US
 gzip -t /tmp/documenso-move.sql.gz && gzip -dc /tmp/documenso-move.sql.gz | tail -n 3   # 应以 dump complete 结尾
 ```
 
-拷到新服务器（经内网 scp），然后在新服务器上**只起数据库**并恢复：
+拷到新服务器，然后在新服务器上**只起数据库**并恢复：
+
+```bash
+scp -3 <旧服务器别名>:/tmp/documenso-move.sql.gz <生产服务器别名>:/tmp/documenso-move.sql.gz
+```
+
+再在新服务器上：
 
 ```bash
 cd /opt/apps/Perri/documenso/documenso

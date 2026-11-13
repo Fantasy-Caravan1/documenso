@@ -294,6 +294,27 @@ test('the host comes from ~/.config/fantasy-documenso/ssh-host when SSH_HOST is 
   cleanup(h);
 });
 
+test('an ssh config alias, user@host and an IP are accepted as the host', () => {
+  for (const host of ['fantasy-prod', 'deploy@prod-host.example.invalid', '192.0.2.10']) {
+    const h = setup();
+    const r = run(h, { env: { SSH_HOST: host } });
+    assert.equal(r.status, 0, `${host}\n${r.out}`);
+    assert.ok(has(r, `local ssh ${host} true`), r.calls);
+    cleanup(h);
+  }
+});
+
+test('a host with whitespace or quotes is refused before anything runs', () => {
+  for (const host of ['prod host', "prod'host", 'prod"host', 'prod\thost']) {
+    const h = setup();
+    const r = run(h, { env: { SSH_HOST: host } });
+    assert.equal(r.status, 1, host);
+    assert.match(r.out, /BLOCKED: SSH_HOST is not an ssh destination/);
+    assert.equal(r.calls, '');
+    cleanup(h);
+  }
+});
+
 test('a host value that could inject shell is refused', () => {
   const h = setup();
   const r = run(h, { env: { SSH_HOST: 'host;rm -rf /' } });
@@ -319,6 +340,8 @@ test('host unreachable: BLOCKED, nothing built', () => {
   const r = run(h);
   assert.equal(r.status, 1);
   assert.match(r.out, /BLOCKED: cannot reach deploy-target over ssh/);
+  assert.match(r.out, /does not open port 22 to the outside: use an ~\/\.ssh\/config alias with/);
+  assert.match(r.out, /ProxyJump through the development server, or run this on the development server itself/);
   assertNothingBuilt(r);
   cleanup(h);
 });
