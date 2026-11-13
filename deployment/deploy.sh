@@ -72,6 +72,12 @@ MIGRATION_PREVIEW="${MIGRATION_PREVIEW:-1}"
 # under emulation (measured 2026-11-13: heap exhausted at 2040 MB, ten minutes
 # in). docker/Dockerfile takes NODE_OPTIONS as a build-time ARG for this.
 BUILD_NODE_HEAP_MB="${BUILD_NODE_HEAP_MB:-4096}"
+# A new server (deployment/README.md, "新服务器上的首次发布"): no app container
+# yet, and the database may have to be started. Never the default.
+FIRST_RELEASE="${FIRST_RELEASE:-0}"
+ALLOW_EMPTY_DATABASE="${ALLOW_EMPTY_DATABASE:-0}"
+DB_HEALTH_RETRIES="${DB_HEALTH_RETRIES:-30}"
+DB_HEALTH_INTERVAL="${DB_HEALTH_INTERVAL:-5}"
 
 say() { printf '\n==> %s\n' "$1"; }
 blocked() { echo "BLOCKED: $1" >&2; exit 1; }
@@ -88,13 +94,20 @@ INT_FORMAT='^[0-9]+$'
 [[ "$ENV_FILE" =~ $REL_FORMAT ]] || blocked "ENV_FILE must be a path of letters, digits, '.', '_', '-' and '/'."
 for pair in "BACKUP_KEEP=$BACKUP_KEEP" "MIN_FREE_GB=$MIN_FREE_GB" "APP_PORT=$APP_PORT" \
             "HEALTH_RETRIES=$HEALTH_RETRIES" "HEALTH_INTERVAL=$HEALTH_INTERVAL" \
-            "BUILD_NODE_HEAP_MB=$BUILD_NODE_HEAP_MB"; do
+            "BUILD_NODE_HEAP_MB=$BUILD_NODE_HEAP_MB" "DB_HEALTH_RETRIES=$DB_HEALTH_RETRIES" \
+            "DB_HEALTH_INTERVAL=$DB_HEALTH_INTERVAL"; do
   [[ "${pair#*=}" =~ $INT_FORMAT ]] || blocked "${pair%%=*} must be a whole number, not '${pair#*=}'."
 done
 [ "$BACKUP_KEEP" -ge 1 ] || blocked "BACKUP_KEEP must be at least 1."
 [ "$HEALTH_RETRIES" -ge 1 ] || blocked "HEALTH_RETRIES must be at least 1."
 [ "$BUILD_NODE_HEAP_MB" -ge 512 ] || blocked "BUILD_NODE_HEAP_MB must be at least 512."
 case "$MIGRATION_PREVIEW" in 0|1) ;; *) blocked "MIGRATION_PREVIEW must be 0 or 1." ;; esac
+case "$FIRST_RELEASE" in 0|1) ;; *) blocked "FIRST_RELEASE must be 0 or 1." ;; esac
+case "$ALLOW_EMPTY_DATABASE" in 0|1) ;; *) blocked "ALLOW_EMPTY_DATABASE must be 0 or 1." ;; esac
+[ "$DB_HEALTH_RETRIES" -ge 1 ] || blocked "DB_HEALTH_RETRIES must be at least 1."
+if [ "$ALLOW_EMPTY_DATABASE" = 1 ] && [ "$FIRST_RELEASE" != 1 ]; then
+  blocked "ALLOW_EMPTY_DATABASE=1 only means something with FIRST_RELEASE=1."
+fi
 case "$BACKUP_DIR/" in
   "$REMOTE_DIR"/*) blocked "BACKUP_DIR must be outside REMOTE_DIR ($REMOTE_DIR): a checkout is no place for database dumps." ;;
 esac
@@ -168,6 +181,9 @@ case "${SHIP:-}" in
 esac
 
 echo "Releasing $VERSION ($SHA) to $ENVIRONMENT; image travels by $SHIP_VIA ($SHIP_WHY)."
+if [ "$FIRST_RELEASE" = 1 ]; then
+  echo "FIRST RELEASE: no app container is expected on the host, and there will be nothing to roll back to."
+fi
 
 # -- Preflight ---------------------------------------------------------------
 # Nothing is built or pushed until every check here has passed.
@@ -192,15 +208,18 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" true 2>/dev/null \
 # arguments to the script, and the script itself arrives on stdin: there is no
 # copy of it on the host to go stale. None of these are secret.
 remote_env() {
-  printf "MODE='%s' SHA='%s' FULL_SHA='%s' VERSION='%s' REMOTE_DIR='%s' COMPOSE_FILE='%s' ENV_FILE='%s' BACKUP_DIR='%s' BACKUP_KEEP='%s' MIN_FREE_GB='%s' APP_PORT='%s' HEALTH_RETRIES='%s' HEALTH_INTERVAL='%s' MIGRATION_PREVIEW='%s'" \
+  printf "MODE='%s' SHA='%s' FULL_SHA='%s' VERSION='%s' REMOTE_DIR='%s' COMPOSE_FILE='%s' ENV_FILE='%s' BACKUP_DIR='%s' BACKUP_KEEP='%s' MIN_FREE_GB='%s' APP_PORT='%s' HEALTH_RETRIES='%s' HEALTH_INTERVAL='%s' MIGRATION_PREVIEW='%s' FIRST_RELEASE='%s' ALLOW_EMPTY_DATABASE='%s' DB_HEALTH_RETRIES='%s' DB_HEALTH_INTERVAL='%s'" \
     "$1" "$SHA" "$FULL_SHA" "$(printf '%s' "$VERSION" | tr -cd 'A-Za-z0-9._-')" "$REMOTE_DIR" "$COMPOSE_FILE" "$ENV_FILE" \
-    "$BACKUP_DIR" "$BACKUP_KEEP" "$MIN_FREE_GB" "$APP_PORT" "$HEALTH_RETRIES" "$HEALTH_INTERVAL" "$MIGRATION_PREVIEW"
+    "$BACKUP_DIR" "$BACKUP_KEEP" "$MIN_FREE_GB" "$APP_PORT" "$HEALTH_RETRIES" "$HEALTH_INTERVAL" "$MIGRATION_PREVIEW" \
+    "$FIRST_RELEASE" "$ALLOW_EMPTY_DATABASE" "$DB_HEALTH_RETRIES" "$DB_HEALTH_INTERVAL"
 }
 
 # The host's half of the preflight is deploy-remote.sh itself in MODE=preflight:
 # compose and env files, both containers running, the compose image reference,
-# disk, backup directory. It changes nothing; the release runs the same checks
-# again before it starts.
+# disk, backup directory. It changes nothing, with one exception: with
+# FIRST_RELEASE=1 on a host with no database container it starts the
+# `database` service alone and checks it is not empty, before the build rather
+# than twenty minutes after. The release runs the same checks again.
 say "Preflight on $SSH_HOST"
 ssh "$SSH_HOST" "$(remote_env preflight) bash -s" < deployment/deploy-remote.sh
 

@@ -169,7 +169,25 @@ if (cmd === 'inspect') {
   const fmt = option(args, '-f');
   const c = Object.values(state.containers).find((x) => x.id === args[args.length - 1]);
   if (!c) fail('No such container');
-  out((fmt === '{{.Config.Image}}' ? c.ref : c.image) + '\n');
+  if (fmt === '{{.State.Status}}') out((c.running ? 'running' : 'exited') + '\n');
+  else if (fmt === '{{.State.Health.Status}}') out((scenario.dbHealth || 'healthy') + '\n');
+  else out((fmt === '{{.Config.Image}}' ? c.ref : c.image) + '\n');
+  process.exit(0);
+}
+
+if (cmd === 'volume' && args[1] === 'inspect') {
+  if ((state.volumes || []).includes(args[2])) {
+    out('[{}]\n');
+    process.exit(0);
+  }
+  fail('no such volume');
+}
+
+if (cmd === 'exec' && args.join(' ').includes('psql')) {
+  const sql = readStdin().toString();
+  fs.appendFileSync(path.join(root, 'calls.log'), side + ' psql-stdin ' + sql.replace(/\n/g, ' | ') + '\n');
+  if (scenario.migrations === 'error') fail('psql: error');
+  out(String(scenario.migrations ?? 12) + '\n');
   process.exit(0);
 }
 
@@ -199,6 +217,18 @@ if (cmd === 'compose') {
     out('Datasource "db": PostgreSQL database "documenso" at "postgresql://documenso:harness-secret@database:5432/documenso"\n');
     out('1 migration found in prisma/migrations\nFollowing migration have not yet been applied:\n20261101000000_next\n');
     process.exit(1);
+  }
+  if (sub === 'up' && !state.containers[service]) {
+    // A service with no container yet: a first release.
+    const ref = service === 'database' ? 'postgres:15' : scenario.liveRef;
+    if (service === 'database') {
+      state.images['sha256:pg'] = { labels: {} };
+      state.tags['postgres:15'] = 'sha256:pg';
+      state.volumes = [...(state.volumes || []), 'documenso-production_database'];
+    }
+    state.containers[service] = { id: 'c-new-' + service, ref, image: resolve(ref), running: true };
+    save();
+    process.exit(0);
   }
   if (sub === 'up') {
     const marker = path.join(root, 'up-failed-once');

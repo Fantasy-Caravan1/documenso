@@ -104,14 +104,18 @@ const setup = (opts = {}) => {
   if (opts.sshDown) {
     writeFileSync(join(root, 'ssh-down'), '');
   }
+  const fresh = Boolean(opts.fresh);
   const remoteState = {
     next: 1,
-    tags: {
-      [LIVE_REF]: 'sha256:old',
-      'documenso-fantasy:rollback': 'sha256:older',
-      'documenso-fantasy:0123456789ab': 'sha256:old',
-      'someone-else:latest': 'sha256:other',
-    },
+    volumes: opts.volumes ?? (fresh ? [] : ['documenso-production_database']),
+    tags: fresh
+      ? { 'someone-else:latest': 'sha256:other' }
+      : {
+          [LIVE_REF]: 'sha256:old',
+          'documenso-fantasy:rollback': 'sha256:older',
+          'documenso-fantasy:0123456789ab': 'sha256:old',
+          'someone-else:latest': 'sha256:other',
+        },
     images: {
       'sha256:old': { labels: {} },
       'sha256:older': { labels: {} },
@@ -123,6 +127,13 @@ const setup = (opts = {}) => {
       database: { id: 'c-db', ref: 'postgres:15', image: 'sha256:pg', running: opts.dbRunning ?? true },
     },
   };
+  if (fresh || opts.noApp) delete remoteState.containers.documenso;
+  if (fresh || opts.noDb) delete remoteState.containers.database;
+  if (fresh) {
+    delete remoteState.images['sha256:old'];
+    delete remoteState.images['sha256:older'];
+    delete remoteState.images['sha256:pg'];
+  }
   writeFileSync(join(root, 'state-remote.json'), JSON.stringify(remoteState));
   writeFileSync(join(root, 'calls.log'), '');
   return { root, work, remote, backups, home, bin, fullSha, sha };
@@ -130,7 +141,7 @@ const setup = (opts = {}) => {
 
 const run = (h, { args = ['production'], env = {} } = {}) => {
   const base = { ...process.env };
-  for (const k of ['SSH_HOST', 'SHIP', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE', 'BUILD_NODE_HEAP_MB']) {
+  for (const k of ['SSH_HOST', 'SHIP', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE', 'BUILD_NODE_HEAP_MB', 'FIRST_RELEASE', 'ALLOW_EMPTY_DATABASE']) {
     delete base[k];
   }
   const r = spawnSync('bash', [join(h.work, 'deployment', 'deploy.sh'), ...args], {
@@ -146,6 +157,8 @@ const run = (h, { args = ['production'], env = {} } = {}) => {
       BACKUP_DIR: h.backups,
       HEALTH_RETRIES: '2',
       HEALTH_INTERVAL: '0',
+      DB_HEALTH_RETRIES: '2',
+      DB_HEALTH_INTERVAL: '0',
       ...env,
     },
   });
@@ -162,24 +175,31 @@ const cleanup = (h) => rmSync(h.root, { recursive: true, force: true });
 const at = (r, needle) => r.lines.findIndex((l) => l.includes(needle));
 const has = (r, needle) => at(r, needle) >= 0;
 
-// The invariants that hold on every path, whatever happened.
-const assertNeverTouchesProject = (r) => {
+// The invariants that hold on every path, whatever happened. On a first
+// release `up -d database` and `up -d --no-deps documenso` are the two extra
+// forms allowed; everywhere else only the in-place recreate is.
+const assertNeverTouchesProject = (r, { first = false } = {}) => {
   for (const line of r.lines.filter((l) => l.includes('docker compose'))) {
     assert.ok(!/\bdown\b/.test(line), `never compose down:\n${line}`);
     const verb = line.match(/ -f \S+ (\S+)/)?.[1];
     assert.ok(['ps', 'config', 'up', 'run'].includes(verb), `only ps, config, up and run:\n${line}`);
     if (/ up /.test(line)) {
-      assert.match(line, / up -d --no-deps --force-recreate documenso$/, `up recreates the app only:\n${line}`);
+      const allowed = first
+        ? / up -d (--no-deps --force-recreate documenso|--no-deps documenso|database)$/
+        : / up -d --no-deps --force-recreate documenso$/;
+      assert.match(line, allowed, `up recreates the app only:\n${line}`);
     }
     if (/ run /.test(line)) {
       assert.match(line, / run --rm --no-deps -T documenso /, `one-off runs are the app service:\n${line}`);
     }
   }
   assert.ok(!/docker (image |system |volume |container |builder )?prune/.test(r.calls), 'never prunes');
-  assert.ok(!/docker volume/.test(r.calls), 'never touches volumes');
+  assert.ok(!/docker volume (rm|create|prune)/.test(r.calls), 'never changes volumes');
   assert.ok(!/remote docker (rm|stop|kill)\b/.test(r.calls), 'never removes or stops containers directly');
   assert.ok(!/(rmi|image rm) [^\n]*(postgres|someone-else|sha256:pg|sha256:other)/.test(r.calls), 'other images untouched');
-  assert.equal(r.remoteState.containers.database.id, 'c-db', 'the database container is never recreated');
+  if (!first) {
+    assert.equal(r.remoteState.containers.database?.id, 'c-db', 'the database container is never recreated');
+  }
   assert.ok(r.remoteState.tags['someone-else:latest'], 'another project’s tag survives');
 };
 
@@ -326,11 +346,14 @@ test('app container not running: BLOCKED, nothing built', () => {
   cleanup(h);
 });
 
-test('database container not running: BLOCKED, nothing built', () => {
+test('database container stopped: BLOCKED with the commands to look, and it is not started', () => {
   const h = setup({ dbRunning: false });
   const r = run(h);
   assert.equal(r.status, 1);
-  assert.match(r.out, /BLOCKED: the 'database' service is not running/);
+  assert.match(r.out, /BLOCKED: the 'database' container exists but is not running \(state: exited\)/);
+  assert.match(r.out, /this script will not:/);
+  assert.match(r.out, /logs --tail 100 database/);
+  assert.ok(!r.calls.includes(' up '), 'nothing is started');
   assertNothingBuilt(r);
   cleanup(h);
 });
@@ -727,5 +750,213 @@ test('exactly the heap plus 2 GB is enough', () => {
   const h = setup({ scenario: { dockerMem: 6 * 1024 * 1024 * 1024 } });
   const r = run(h);
   assert.equal(r.status, 0, r.out);
+  cleanup(h);
+});
+
+// -- Host states and the first release ------------------------------------------
+
+test('database container gone but its volume left: BLOCKED with the command to start only the database', () => {
+  const h = setup({ noDb: true });
+  const r = run(h);
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: the database volume documenso-production_database is still here, but there is no 'database' container/);
+  assert.match(r.out, /up -d --no-deps database/);
+  assert.ok(!r.calls.includes(' up '), 'nothing is started');
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('database gone with its volume, app still there: BLOCKED as a host that never ran the stack', () => {
+  const h = setup({ noDb: true, volumes: [] });
+  const r = run(h);
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: no 'database' container and no volume documenso-production_database: this host has never run this stack/);
+  assert.match(r.out, /新服务器上的首次发布/);
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('a new server without FIRST_RELEASE: BLOCKED pointing at the README, nothing started', () => {
+  const h = setup({ fresh: true });
+  const r = run(h);
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: there is no 'documenso' container on this host/);
+  assert.match(r.out, /FIRST_RELEASE=1/);
+  assert.ok(!r.calls.includes(' up '), 'nothing is started');
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('app container missing without FIRST_RELEASE: BLOCKED pointing at the README', () => {
+  const h = setup({ noApp: true });
+  const r = run(h);
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: there is no 'documenso' container on this host/);
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('FIRST_RELEASE=1 on a host that has the app: BLOCKED, this is not a first release', () => {
+  const h = setup();
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: FIRST_RELEASE=1, but this host already has a 'documenso' container: this is not a first release/);
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('ALLOW_EMPTY_DATABASE=1 without FIRST_RELEASE is refused', () => {
+  const h = setup();
+  const r = run(h, { env: { ALLOW_EMPTY_DATABASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: ALLOW_EMPTY_DATABASE=1 only means something with FIRST_RELEASE=1/);
+  assert.equal(r.calls, '');
+  cleanup(h);
+});
+
+test('first release, empty database: started, found empty, BLOCKED before any build; app never started', () => {
+  const h = setup({ fresh: true, scenario: { migrations: -1 } });
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: the database is empty \(no _prisma_migrations records\)/);
+  assert.match(r.out, /no users, no API tokens, no documents/);
+  assert.match(r.out, /restore the old server's backup first/);
+  assert.match(r.out, /FIRST_RELEASE=1 ALLOW_EMPTY_DATABASE=1/);
+  assert.ok(has(r, 'up -d database'), r.calls);
+  assert.ok(!r.calls.includes('up -d --no-deps documenso'), 'the app is never started');
+  assert.ok(!r.remoteState.containers.documenso, 'no app container');
+  assertNothingBuilt(r);
+  assertNeverTouchesProject(r, { first: true });
+  cleanup(h);
+});
+
+test('first release, migrations table present but empty: still empty', () => {
+  const h = setup({ fresh: true, scenario: { migrations: 0 } });
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: the database is empty/);
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('first release, database never healthy: BLOCKED, left running, nothing built', () => {
+  const h = setup({ fresh: true, scenario: { dbHealth: 'starting' } });
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: 'database' did not become healthy \(last: starting\)/);
+  assert.ok(r.remoteState.containers.database, 'the database container stays');
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('first release, unreadable database: BLOCKED', () => {
+  const h = setup({ fresh: true, scenario: { migrations: 'error' } });
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: could not read the database/);
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('first release, a bind-mounted file (the certificate) missing: BLOCKED before the database starts', () => {
+  const h = setup({ fresh: true });
+  writeFileSync(
+    join(h.remote, 'docker', 'production', 'compose.yml'),
+    `name: documenso-production\nservices:\n  documenso:\n    volumes:\n      - ${h.root}/no-such-cert.p12:/opt/documenso/cert.p12:ro\n`,
+  );
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: docker\/production\/compose.yml mounts host paths that do not exist on this host:/);
+  assert.match(r.out, /no-such-cert\.p12/);
+  assert.ok(!r.calls.includes(' up '), 'the database is not started');
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('first release, no bind mount in the compose file: a reminder, not a block', () => {
+  const h = setup({ fresh: true });
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /WARNING: .*bind-mounts no host path; check by hand that the signing certificate/);
+  cleanup(h);
+});
+
+test('first release with restored data: db up, data check, build, ship, backup, app up, health', () => {
+  const h = setup({ fresh: true });
+  const cert = join(h.root, 'cert.p12');
+  writeFileSync(cert, 'fake');
+  writeFileSync(
+    join(h.remote, 'docker', 'production', 'compose.yml'),
+    `name: documenso-production\nservices:\n  documenso:\n    image: ${LIVE_REF}\n    volumes:\n      - ${cert}:/opt/documenso/cert.p12:ro\n`,
+  );
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /FIRST RELEASE/);
+  assert.match(r.out, /bind-mounted host paths present: .*cert\.p12/);
+  assert.match(r.out, /database holds Documenso data \(12 applied migrations recorded\)/);
+  assert.match(r.out, /no rollback point/);
+  const dbUp = at(r, 'up -d database');
+  const check = at(r, 'remote psql-stdin');
+  const build = at(r, 'local docker build');
+  const ship = at(r, 'remote docker load');
+  const dump = at(r, 'exec pg_dump');
+  const retag = at(r, `remote docker tag documenso-fantasy:${h.sha} ${LIVE_REF}`);
+  const appUp = at(r, 'up -d --no-deps documenso');
+  const health = at(r, 'remote curl -s --max-time 10 -w');
+  const order = [dbUp, check, build, ship, dump, retag, appUp, health];
+  assert.ok(
+    order.every((v, i) => v >= 0 && (i === 0 || v > order[i - 1])),
+    `order dbUp<check<build<ship<dump<retag<appUp<health: ${order}\n${r.calls}`,
+  );
+  assert.equal(r.lines.filter((l) => l.includes(' up -d database')).length, 1, 'the database is started once');
+  assert.ok(!r.calls.includes('--force-recreate'), 'nothing to recreate');
+  assert.ok(!has(r, 'predeploy-'), 'no rollback point');
+  assert.equal(r.backups.length, 1, 'restored data is backed up before the app touches it');
+  const s = r.remoteState;
+  assert.equal(s.containers.documenso.image, s.tags[`documenso-fantasy:${h.sha}`], 'the app runs the new image');
+  assert.equal(s.tags[LIVE_REF], s.tags[`documenso-fantasy:${h.sha}`]);
+  assert.ok(!s.tags['documenso-fantasy:rollback'], 'no rollback tag yet');
+  assert.ok(r.calls.includes('psql-stdin select to_regclass'), 'the query travels on stdin');
+  assert.ok(!/docker exec [^\n]*select/.test(r.calls), 'no SQL on the command line');
+  assertNeverTouchesProject(r, { first: true });
+  cleanup(h);
+});
+
+test('first release on an empty database with ALLOW_EMPTY_DATABASE=1: no backup, release goes on', () => {
+  const h = setup({ fresh: true, scenario: { migrations: -1 } });
+  const r = run(h, { env: { FIRST_RELEASE: '1', ALLOW_EMPTY_DATABASE: '1' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /WARNING: the database is empty and ALLOW_EMPTY_DATABASE=1: this release creates a brand-new instance/);
+  assert.match(r.out, /no backup to take/);
+  assert.ok(!has(r, 'exec pg_dump'), 'no pg_dump');
+  assert.deepEqual(r.backups, []);
+  assert.ok(has(r, 'up -d --no-deps documenso'));
+  assertNeverTouchesProject(r, { first: true });
+  cleanup(h);
+});
+
+test('first release, health fails: no rollback, no down, database container and volume untouched', () => {
+  const h = setup({ fresh: true, scenario: { healthNew: { code: 502, status: 'none' } } });
+  const r = run(h, { env: { FIRST_RELEASE: '1' } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /RELEASE FAILED: no healthy response from the new image/);
+  assert.match(r.out, /No rollback target \(first release\)/);
+  assert.match(r.out, /logs --tail 200 documenso/);
+  assert.equal(r.lines.filter((l) => / up -d /.test(l) && l.includes('documenso')).length, 1, 'no second up');
+  const s = r.remoteState;
+  assert.equal(s.containers.database.id, 'c-new-database', 'the database container stays');
+  assert.ok(s.volumes.includes('documenso-production_database'), 'its volume stays');
+  assert.ok(s.containers.documenso, 'the app container is left for inspection');
+  assert.ok(!r.out.includes('DEPLOYED'));
+  assertNeverTouchesProject(r, { first: true });
+  cleanup(h);
+});
+
+test('the existing-host release never asks the database with psql and never starts it', () => {
+  const h = setup();
+  const r = run(h);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(!has(r, 'psql'), r.calls);
+  assert.ok(!has(r, 'up -d database'), r.calls);
   cleanup(h);
 });

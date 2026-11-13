@@ -68,10 +68,13 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 | 6 | 本机 docker 可用（`docker info`）；Docker 内存 ≥ `BUILD_NODE_HEAP_MB` + 2048 MB | 开发机 |
 | 7 | ssh 能连（BatchMode，15 秒超时） | 开发机 |
 | 8 | `REMOTE_DIR`、compose 文件、env 文件存在；docker 可用 | 服务器（`MODE=preflight`） |
-| 9 | `documenso` 恰好一个容器在运行；`database` 在运行 | 服务器 |
+| 9 | 应用容器：没设 `FIRST_RELEASE` 时必须存在且恰好一个在运行；设了 `FIRST_RELEASE=1` 时必须不存在 | 服务器 |
+| 9a | `database`：在运行 → 通过；容器在但停着 → BLOCKED（不替人启动）；容器没了但卷 `<项目名>_database` 还在 → BLOCKED（给只起数据库的命令）；容器和卷都没有 → 没设 `FIRST_RELEASE` 时 BLOCKED，设了则留到第 12a 步启动 | 服务器 |
 | 10 | 运行中的应用容器是从 `documenso-fantasy:<tag>` 启动的，且 compose 文件现在仍写这个引用 | 服务器 |
 | 11 | docker 数据目录所在盘剩余 ≥ `MIN_FREE_GB` | 服务器 |
+| 10a | 仅 `FIRST_RELEASE=1`：compose 引用的镜像 tag 从 `compose config --images` 里取唯一的 `documenso-fantasy:<tag>`；compose 文件里挂载的宿主机路径（证书）都存在 | 服务器 |
 | 12 | `BACKUP_DIR` 能建、能写 | 服务器 |
+| 12a | 仅 `FIRST_RELEASE=1`：`database` 没有容器时 `docker compose … up -d database`（**预检里唯一改动主机的一步**，只起这一个服务），等 healthcheck 变 healthy；然后查库里 `_prisma_migrations` 是否有记录。空库 → BLOCKED，除非 `ALLOW_EMPTY_DATABASE=1` | 服务器 |
 | 13 | 走仓库时：仓库格式、token 文件 600、匿名访问不是 200（不是公开仓库）、pull token 能换到 JWT、带 token 访问返回 200 且 `is_private: true` | 开发机 |
 
 ### [1/4] 构建
@@ -137,6 +140,10 @@ git archive <commit> | docker build --platform linux/amd64 \
 | `HEALTH_RETRIES` | `30` | 健康检查次数 |
 | `HEALTH_INTERVAL` | `5` | 每次间隔秒数 |
 | `MIGRATION_PREVIEW` | `1` | `0` 关闭迁移预览 |
+| `FIRST_RELEASE` | `0` | `1` = 新服务器上的首次发布（见下一节） |
+| `ALLOW_EMPTY_DATABASE` | `0` | `1` = 首次发布时明知库是空的也继续（新建一个全新实例）；只能和 `FIRST_RELEASE=1` 一起用 |
+| `DB_HEALTH_RETRIES` | `30` | 首次发布起数据库后等 healthy 的次数 |
+| `DB_HEALTH_INTERVAL` | `5` | 每次间隔秒数 |
 | `BUILD_NODE_HEAP_MB` | `4096` | 构建期 Node 的 `--max-old-space-size`（MB，整数，≥ 512）；Docker 内存需 ≥ 它 + 2048 MB |
 
 所有值在送到服务器前都按白名单字符校验，作为环境变量放在 `bash -s` 前面传过去，不进脚本的 argv。
@@ -161,7 +168,20 @@ git archive <commit> | docker build --platform linux/amd64 \
 | `BLOCKED: … does not exist on this host` / `… does not exist.` | 服务器上的 `REMOTE_DIR`、compose 文件或 env 文件不在 |
 | `BLOCKED: docker is not usable on this host by this user` | ssh 用户没有 docker 权限 |
 | `BLOCKED: the 'documenso' service is not running exactly one container` | 应用没在跑（或跑了多个）。本流程只替换正在跑的服务，不负责拉起停掉的服务，先手工处理 |
-| `BLOCKED: the 'database' service is not running` | 数据库没在跑，不能备份，不发布 |
+| `BLOCKED: the 'database' container exists but is not running (state: …)` | 数据库容器停了。先看日志查原因，再自己起（提示里给了命令）；脚本不替人启动 |
+| `BLOCKED: the database volume <项目>_database is still here, but there is no 'database' container.` | 卷还在、容器没了。按提示只起数据库、核对数据后重跑 |
+| `BLOCKED: no 'database' container and no volume …: this host has never run this stack.` | 这台主机没跑过这套栈；看“新服务器上的首次发布”，带 `FIRST_RELEASE=1` |
+| `BLOCKED: there is no 'documenso' container on this host. …` | 同上，新服务器要带 `FIRST_RELEASE=1` |
+| `BLOCKED: FIRST_RELEASE=1, but this host already has a 'documenso' container: this is not a first release.` | 去掉 `FIRST_RELEASE` |
+| `BLOCKED: ALLOW_EMPTY_DATABASE=1 only means something with FIRST_RELEASE=1.` | 两个要一起用 |
+| `BLOCKED: … must name exactly one documenso-fantasy:<tag> image for 'documenso'` | 首次发布时 compose 里的应用镜像不是唯一一个 `documenso-fantasy:<tag>` |
+| `BLOCKED: … mounts host paths that do not exist on this host:` | 首次发布前证书等挂载文件没放好 |
+| `WARNING: … bind-mounts no host path …` / `… mounts paths built from variables …` | 取不到或解析不了挂载路径，人工确认证书在位 |
+| `BLOCKED: 'database' did not become healthy (last: …)` | 首次发布起的数据库没变 healthy；容器留着，看日志 |
+| `BLOCKED: could not read the database …` | 查 `_prisma_migrations` 失败 |
+| `BLOCKED: the database is empty (no _prisma_migrations records).` | **空库**。继续会建出一个没有用户、API token、文档、webhook 配置的全新实例，ERP 签署会全部失败。搬迁就先恢复旧服务器的备份；确实要新建才带 `FIRST_RELEASE=1 ALLOW_EMPTY_DATABASE=1` |
+| `WARNING: the database is empty and ALLOW_EMPTY_DATABASE=1 …` | 已获允许的空库：不做备份，继续 |
+| `!! No rollback target (first release).` | 首次发布健康检查不过：没有旧镜像可回。应用容器留着看日志；数据库容器和卷不动；迁移不回滚 |
 | `BLOCKED: the running 'documenso' container was started from '…', not a fixed documenso-fantasy:<tag> reference` | compose 里应用镜像不是 `documenso-fantasy:<tag>`（比如是 digest），改 tag 的做法用不了 |
 | `BLOCKED: … no longer names …` | compose 文件在容器启动后被改过，`up` 会用别的镜像；先手工理清 |
 | `BLOCKED: only NG free …` | 服务器磁盘不够；`docker builder prune -af` 不碰镜像 |
@@ -177,6 +197,72 @@ git archive <commit> | docker build --platform linux/amd64 \
 | `!! RELEASE FAILED: …` | 切换后不健康，已自动回滚；看后面几行是否 “previous image is serving again” |
 | `!! The previous image did NOT come back healthy. Manual intervention required` | 回滚后旧镜像也起不来，见下面手工回滚 / 恢复 |
 | `WARNING: the signing certificate is not available` | 证书缺失，发布前就缺，不算失败；签字文件无法封存，需要处理 `/opt/documenso/cert.p12` |
+
+## 新服务器上的首次发布 / 把实例搬到新服务器
+
+新服务器上没有 postgres 镜像、没有 `database` 容器、没有数据卷，也没有应用容器。普通发布会在预检时 BLOCKED，需要用 `FIRST_RELEASE=1`。
+
+**最要防的是在空库上把应用起起来。** `start.sh` 会把迁移跑完，健康检查也会通过，看起来一切正常，但用户、API token、文档、webhook 配置全都没有，ERP 的签署会全部失败。所以首次发布会先查库里有没有 `_prisma_migrations` 记录：空库一律 BLOCKED，除非显式带上 `ALLOW_EMPTY_DATABASE=1`。
+
+### 1. 新服务器上先放好
+
+- docker 和 docker compose v2；ssh 用户能直接用 docker（不经 sudo）。
+- `REMOTE_DIR`（默认 `/opt/apps/Perri/documenso/documenso`）下的 `docker/production/compose.yml`（overlay 版本），以及手工维护的 `.env.production`。
+- 签名证书 `/opt/documenso/cert.p12`，即 compose 里挂载的路径。首次发布会检查 compose 文件里挂载的宿主机路径是否存在。这一步读的是 compose 文件原文，不是 `docker compose config`，所以不会打印 env 的值。
+- `BACKUP_DIR` 能写。
+
+证书、`.env.production`、数据库备份这几样文件，从旧服务器经内网 scp 到新服务器最快。
+
+### 2. 搬数据（新建实例时跳过，改用 `ALLOW_EMPTY_DATABASE=1`）
+
+旧服务器上取一份备份。可以直接用最近一次发布留下的 `BACKUP_DIR/documenso-*.sql.gz`；要最新的数据，就先停掉旧应用，免得备份之后又有新签字：
+
+```bash
+cd /opt/apps/Perri/documenso/documenso
+docker compose --env-file .env.production -f docker/production/compose.yml stop documenso   # 不是 down
+docker exec documenso-production-database-1 sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  | gzip > /tmp/documenso-move.sql.gz
+gzip -t /tmp/documenso-move.sql.gz && gzip -dc /tmp/documenso-move.sql.gz | tail -n 3   # 应以 dump complete 结尾
+```
+
+拷到新服务器（经内网 scp），然后在新服务器上**只起数据库**并恢复：
+
+```bash
+cd /opt/apps/Perri/documenso/documenso
+C="docker compose --env-file .env.production -f docker/production/compose.yml"
+$C up -d database
+until [ "$(docker inspect -f '{{.State.Health.Status}}' documenso-production-database-1)" = healthy ]; do sleep 2; done
+gzip -dc /tmp/documenso-move.sql.gz | docker exec -i documenso-production-database-1 sh -c \
+  'exec psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+# 核对：应有记录，条数与旧库一致
+docker exec documenso-production-database-1 sh -c \
+  'psql -X -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select count(*) from _prisma_migrations"'
+```
+
+用户名、库名、口令都由容器自己的环境变量提供，不出现在命令行里。新卷是空的，不需要先 DROP。
+
+### 3. 发布
+
+```bash
+FIRST_RELEASE=1 deployment/deploy.sh production
+```
+
+和普通发布的不同：
+
+- 预检里，如果没有 `database` 容器，脚本会自己 `up -d database`，只起这一个服务（`postgres:15` 由服务器自己从 Docker Hub 拉），等 healthy 后查空库。这是预检里唯一改动主机的一步，放在构建之前，免得白等 20 分钟构建才发现库是空的。按上面第 2 步恢复过数据时，数据库已经在跑，这一步会跳过。
+- compose 引用的镜像 tag 从 `compose config --images` 里取，即唯一一个 `documenso-fantasy:<tag>`。这个选项只输出镜像名。
+- 没有回滚点，也没有发布前的证书状态。库里有数据就照常先备份；空库（已获允许）跳过备份。
+- 起应用用 `up -d --no-deps documenso`。
+- 健康检查不过时，打印 `No rollback target (first release)` 和看日志的命令，以非零退出。不 `down`，不动数据库容器和卷。
+
+### 4. 两点提醒
+
+- **先发 Documenso，再起 ERP。** ERP 的应用容器以 external 方式接在 `documenso-production_default` 网络上，这个网络由 Documenso 的 compose 建出来。网络不存在时，ERP 的 compose 起不来。
+- **核对网关地址。** 这个网络在新主机上的网关地址可能和旧主机不同，而旧地址被写在 Documenso 的 webhook URL 和 `.env.production` 的 `NEXT_PRIVATE_WEBHOOK_SSRF_BYPASS_HOSTS` 里。搬完用下面的命令核对，不一致就同时改 webhook 设置和 bypass 设置：
+
+  ```bash
+  docker network inspect documenso-production_default -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+  ```
 
 ## 手工回滚
 
