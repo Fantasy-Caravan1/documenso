@@ -67,6 +67,11 @@ APP_PORT="${APP_PORT:-3010}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-30}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-5}"
 MIGRATION_PREVIEW="${MIGRATION_PREVIEW:-1}"
+# V8 sizes its default heap from the memory it can see. Inside an 8 GB Docker
+# Desktop VM that is about 2 GB, and the remix typecheck (tsc) runs out of it
+# under emulation (measured 2026-11-13: heap exhausted at 2040 MB, ten minutes
+# in). docker/Dockerfile takes NODE_OPTIONS as a build-time ARG for this.
+BUILD_NODE_HEAP_MB="${BUILD_NODE_HEAP_MB:-4096}"
 
 say() { printf '\n==> %s\n' "$1"; }
 blocked() { echo "BLOCKED: $1" >&2; exit 1; }
@@ -82,11 +87,13 @@ INT_FORMAT='^[0-9]+$'
 [[ "$COMPOSE_FILE" =~ $REL_FORMAT ]] || blocked "COMPOSE_FILE must be a path of letters, digits, '.', '_', '-' and '/'."
 [[ "$ENV_FILE" =~ $REL_FORMAT ]] || blocked "ENV_FILE must be a path of letters, digits, '.', '_', '-' and '/'."
 for pair in "BACKUP_KEEP=$BACKUP_KEEP" "MIN_FREE_GB=$MIN_FREE_GB" "APP_PORT=$APP_PORT" \
-            "HEALTH_RETRIES=$HEALTH_RETRIES" "HEALTH_INTERVAL=$HEALTH_INTERVAL"; do
+            "HEALTH_RETRIES=$HEALTH_RETRIES" "HEALTH_INTERVAL=$HEALTH_INTERVAL" \
+            "BUILD_NODE_HEAP_MB=$BUILD_NODE_HEAP_MB"; do
   [[ "${pair#*=}" =~ $INT_FORMAT ]] || blocked "${pair%%=*} must be a whole number, not '${pair#*=}'."
 done
 [ "$BACKUP_KEEP" -ge 1 ] || blocked "BACKUP_KEEP must be at least 1."
 [ "$HEALTH_RETRIES" -ge 1 ] || blocked "HEALTH_RETRIES must be at least 1."
+[ "$BUILD_NODE_HEAP_MB" -ge 512 ] || blocked "BUILD_NODE_HEAP_MB must be at least 512."
 case "$MIGRATION_PREVIEW" in 0|1) ;; *) blocked "MIGRATION_PREVIEW must be 0 or 1." ;; esac
 case "$BACKUP_DIR/" in
   "$REMOTE_DIR"/*) blocked "BACKUP_DIR must be outside REMOTE_DIR ($REMOTE_DIR): a checkout is no place for database dumps." ;;
@@ -167,6 +174,16 @@ echo "Releasing $VERSION ($SHA) to $ENVIRONMENT; image travels by $SHIP_VIA ($SH
 
 docker info --format '{{.ServerVersion}}' >/dev/null 2>&1 \
   || blocked "docker is not running on this machine (docker info failed). Start Docker Desktop."
+
+# The build's Node heap plus 2 GB for everything else in the VM (the kernel,
+# buildkit, the emulator, the other stages' processes).
+DOCKER_MEM="$(docker info --format '{{.MemTotal}}' 2>/dev/null | tr -dc '0-9')"
+NEED_MEM=$(( (BUILD_NODE_HEAP_MB + 2048) * 1024 * 1024 ))
+if [ "${DOCKER_MEM:-0}" -lt "$NEED_MEM" ]; then
+  echo "BLOCKED: Docker has $(( ${DOCKER_MEM:-0} / 1048576 )) MB of memory; the build needs BUILD_NODE_HEAP_MB ($BUILD_NODE_HEAP_MB) + 2048 MB." >&2
+  echo "  Raise the memory limit in Docker Desktop (Settings > Resources), or lower BUILD_NODE_HEAP_MB." >&2
+  exit 1
+fi
 
 ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" true 2>/dev/null \
   || blocked "cannot reach $SSH_HOST over ssh (BatchMode, 15s timeout). Check the host, your key and ~/.ssh/config."
@@ -275,12 +292,14 @@ say "[1/4] Build $APP_IMAGE:$SHA for linux/amd64 ($VERSION)"
 # The context is `git archive` of the commit, streamed on stdin: the Dockerfile
 # starts with `COPY . .`, and .dockerignore does not cover everything a working
 # checkout accumulates (.turbo caches, local notes the .gitignore hides). What
-# is built is what was pushed. docker/Dockerfile is not changed; the commit is
-# recorded by a label.
+# is built is what was pushed. The commit is recorded by a label. NODE_OPTIONS
+# is a build-time ARG of the build stage only (the one overlay line in
+# docker/Dockerfile); it does not reach the final image.
 git archive --format=tar "$FULL_SHA" | docker build \
   --platform linux/amd64 \
   --label "org.opencontainers.image.revision=$FULL_SHA" \
   --label "org.opencontainers.image.version=$VERSION" \
+  --build-arg "NODE_OPTIONS=--max-old-space-size=$BUILD_NODE_HEAP_MB" \
   -f docker/Dockerfile \
   -t "$APP_IMAGE:$SHA" \
   -

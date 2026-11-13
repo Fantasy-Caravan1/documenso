@@ -130,7 +130,7 @@ const setup = (opts = {}) => {
 
 const run = (h, { args = ['production'], env = {} } = {}) => {
   const base = { ...process.env };
-  for (const k of ['SSH_HOST', 'SHIP', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE']) {
+  for (const k of ['SSH_HOST', 'SHIP', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE', 'BUILD_NODE_HEAP_MB']) {
     delete base[k];
   }
   const r = spawnSync('bash', [join(h.work, 'deployment', 'deploy.sh'), ...args], {
@@ -682,5 +682,50 @@ test('the release is a no-op when the host already runs this commit', () => {
   assert.match(r.out, /already runs documenso-fantasy:[0-9a-f]{12}; nothing to release/);
   assert.ok(!r.calls.includes(' up -d'), 'no recreate');
   assert.ok(!has(r, 'remote docker exec'), 'no backup');
+  cleanup(h);
+});
+
+// -- Build heap -----------------------------------------------------------------
+
+test('the build gets NODE_OPTIONS with a 4096 MB heap by default', () => {
+  const h = setup();
+  const r = run(h);
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.calls, /local docker build .*--build-arg NODE_OPTIONS=--max-old-space-size=4096 /);
+  cleanup(h);
+});
+
+test('BUILD_NODE_HEAP_MB sets the heap', () => {
+  const h = setup();
+  const r = run(h, { env: { BUILD_NODE_HEAP_MB: '3072' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.calls, /--build-arg NODE_OPTIONS=--max-old-space-size=3072 /);
+  cleanup(h);
+});
+
+test('a BUILD_NODE_HEAP_MB that is not a whole number is refused', () => {
+  const h = setup();
+  const r = run(h, { env: { BUILD_NODE_HEAP_MB: '4g' } });
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: BUILD_NODE_HEAP_MB must be a whole number, not '4g'/);
+  assert.equal(r.calls, '');
+  cleanup(h);
+});
+
+test('too little Docker memory for the heap plus 2 GB: BLOCKED before ssh and build', () => {
+  const h = setup({ scenario: { dockerMem: 6 * 1024 * 1024 * 1024 - 1 } });
+  const r = run(h);
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: Docker has 6143 MB of memory; the build needs BUILD_NODE_HEAP_MB \(4096\) \+ 2048 MB/);
+  assert.match(r.out, /Raise the memory limit in Docker Desktop/);
+  assert.ok(!has(r, 'local ssh'), r.calls);
+  assertNothingBuilt(r);
+  cleanup(h);
+});
+
+test('exactly the heap plus 2 GB is enough', () => {
+  const h = setup({ scenario: { dockerMem: 6 * 1024 * 1024 * 1024 } });
+  const r = run(h);
+  assert.equal(r.status, 0, r.out);
   cleanup(h);
 });

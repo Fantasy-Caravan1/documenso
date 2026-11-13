@@ -57,6 +57,10 @@ const cmd = args[0];
 if (cmd === 'info') {
   if (side === 'local' && scenario.localDockerDown) fail('Cannot connect to the Docker daemon');
   const fmt = option(args, '--format') || '';
+  if (fmt.includes('MemTotal')) {
+    out(String(scenario.dockerMem ?? 8215048192) + '\n');
+    process.exit(0);
+  }
   out(fmt.includes('DockerRootDir') ? (scenario.dockerRoot || '/') + '\n' : '29.0.0\n');
   process.exit(0);
 }

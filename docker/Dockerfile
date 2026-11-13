@@ -82,6 +82,8 @@ COPY turbo.json turbo.json
 
 RUN npm install -g "turbo@^1.9.3"
 
+# Fantasy: optional, build-time only (e.g. --max-old-space-size=4096); unset = upstream behaviour.
+ARG NODE_OPTIONS
 RUN turbo run build --filter=@documenso/remix...
 
 RUN npm prune --omit=dev && npm cache clean --force
