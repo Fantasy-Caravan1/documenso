@@ -659,3 +659,28 @@ test('an image built for the wrong architecture is refused before anything chang
   assert.ok(!r.calls.includes(' up -d'));
   cleanup(h);
 });
+
+test('an unexpected failure after the retag (compose up errors) rolls back through the exit trap', () => {
+  const h = setup({ scenario: { upFailsOnce: true } });
+  const r = run(h);
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /RELEASE FAILED: the release stopped unexpectedly/);
+  assert.match(r.out, /Database migrations are NOT rolled back/);
+  assert.equal(r.remoteState.tags[LIVE_REF], 'sha256:old', 'the compose tag names the old image again');
+  assert.equal(r.remoteState.containers.documenso.image, 'sha256:old');
+  assert.equal(r.remoteState.tags['documenso-fantasy:rollback'], 'sha256:older', 'rollback is not advanced');
+  assertNeverTouchesProject(r);
+  cleanup(h);
+});
+
+test('the release is a no-op when the host already runs this commit', () => {
+  const h = setup();
+  assert.equal(run(h).status, 0);
+  writeFileSync(join(h.root, 'calls.log'), '');
+  const r = run(h);
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /already runs documenso-fantasy:[0-9a-f]{12}; nothing to release/);
+  assert.ok(!r.calls.includes(' up -d'), 'no recreate');
+  assert.ok(!has(r, 'remote docker exec'), 'no backup');
+  cleanup(h);
+});

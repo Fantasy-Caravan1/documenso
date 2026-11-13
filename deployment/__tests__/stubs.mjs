@@ -71,7 +71,8 @@ if (cmd === 'build') {
       labels[k] = v.join('=');
     }
   });
-  const id = 'sha256:built' + state.next++;
+  // Same commit, same id: a rebuild of one commit hits the cache in real docker.
+  const id = 'sha256:built' + (labels['org.opencontainers.image.revision'] || String(state.next++)).slice(0, 12);
   state.images[id] = { labels, arch: scenario.buildArch || 'amd64', size: 2000 };
   state.tags[option(args, '-t')] = id;
   save();
@@ -196,6 +197,11 @@ if (cmd === 'compose') {
     process.exit(1);
   }
   if (sub === 'up') {
+    const marker = path.join(root, 'up-failed-once');
+    if (scenario.upFailsOnce && !fs.existsSync(marker)) {
+      fs.writeFileSync(marker, '');
+      fail('Error response from daemon: simulated failure');
+    }
     const svc = rest[rest.length - 1];
     const c = state.containers[svc];
     const id = resolve(c.ref);

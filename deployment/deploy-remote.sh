@@ -173,6 +173,8 @@ BACKUP_FILE=""
 
 rollback() {
   set +e
+  # If ssh has gone, a write to it must fail quietly, not kill the rollback.
+  trap '' PIPE
   echo "!! RELEASE FAILED: $1" >&2
   if [ "$TAG_MOVED" = 1 ] && [ -n "$PREDEPLOY_TAG" ]; then
     docker tag "$PREDEPLOY_TAG" "$LIVE_REF"
