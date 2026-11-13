@@ -33,13 +33,33 @@ SSH_HOST=<ssh 目标或别名> deployment/deploy.sh production
 
 ### 目标拓扑：生产服务器不对外开放 ssh
 
-计划中的布局：
+计划中的布局。生产服务器和开发服务器**都是新建的机器**；现在跑这套 Documenso 的服务器是第三台，即下文的“旧服务器”，搬迁完成后退出。
 
-- **生产服务器**（新机器）：跑 Documenso，以及 ERP 和 club 的生产容器。22 端口不对外开放。和开发服务器在同一内网。前提：它仍能出网，可以从 Docker Hub 拉 `postgres:15`，走仓库传输时也能从私有仓库拉镜像。
-- **开发服务器**：可以从外面 ssh，跑 ERP 和 club 的 staging。
-- 到生产服务器的登录和文件传输都经过开发服务器。有两种走法。
+- **生产服务器**（新）：跑 Documenso，以及 ERP 和 club 的生产容器。22 端口不对外开放。和开发服务器在同一内网。前提：它仍能出网，可以从 Docker Hub 拉 `postgres:15`，走仓库传输时也能从私有仓库拉镜像。
+- **开发服务器**（新，也是 staging 服务器）：可以从外面 ssh，跑 ERP 和 club 的 staging，经内网访问生产服务器上的 Documenso（见下面的“staging 经内网访问 Documenso”）。
+- **开发机**：开发可能迁到本地，在本地构建镜像，经开发服务器送到生产服务器。
+- 到生产服务器的登录和文件传输都经过开发服务器。有两种走法，**走法一是主路径**。
 
-**走法一：从开发机经跳板。** 在开发机的 `~/.ssh/config` 里给生产服务器配一个别名，`HostName` 写它的内网地址，`ProxyJump` 指向开发服务器：
+**如果 staging 服务器是旧服务器的完整复制（可能这么做，未定）**，复制出来的机器开机时会带着：
+
+- 这套 Documenso 的应用容器和数据库容器。compose 里是 `restart: unless-stopped`，开机后会自己起来。
+- 数据卷 `documenso-production_database` 的一份副本。
+
+这等于出现了**第二个带着生产数据的 Documenso 实例**。它可能用同一份 SMTP 凭证发信，也可能用同一张签署证书签出文件。Documenso 的生产实例只应存在于生产服务器上。所以在复制品联网之前，要把它上面的以下东西停用并删除：
+
+- 应用容器、数据库容器、数据卷；
+- `/opt/apps/Perri/documenso/documenso/.env.production`；
+- 签署证书 `/opt/documenso/cert.p12`。
+
+做之前要确认：
+
+- 复制的方式能不能做到“先断网开机、处理完再联网”；
+- 复制品上还有哪些服务带 `restart` 策略，会跟着自己起来（ERP、club 的生产容器同理）；
+- 旧服务器上的数据库备份（`BACKUP_DIR`）要不要一并删除。
+
+这里只是提醒，脚本不做这件事。
+
+**走法一（主路径）：从开发机经跳板。** 在开发机的 `~/.ssh/config` 里给生产服务器配一个别名，`HostName` 写它的内网地址，`ProxyJump` 指向开发服务器：
 
 ```sshconfig
 Host <开发服务器别名>
@@ -56,6 +76,11 @@ Host <生产服务器别名>
 
 然后把 `SSH_HOST`（或 `~/.config/fantasy-documenso/ssh-host`）填成 `<生产服务器别名>`。脚本照常 `ssh <别名>`，不需要知道跳板的存在。拷证书、`.env.production`、备份时用 `scp`，同样写这个别名。
 
+本地构建后：
+
+- 在公司网络下，测速判慢，镜像本体走 Docker Hub 私有仓库，由生产服务器自己拉。经跳板走的只是命令通道（预检、发布、仓库的 pull token）。
+- 不在公司时，测速判快，镜像经跳板走 ssh 管道。
+
 测速逻辑不变。经跳板时，瓶颈是开发机到开发服务器这一段（内网那一段快得多），测速量到的就是这一段，所以“在公司走仓库、在外面走 ssh”的结论照样成立。
 
 **走法二：直接在开发服务器上发。** 在开发服务器上放一份 `fantasy-production-overlay` 的干净 checkout，在那里运行 `deployment/deploy.sh production`，`SSH_HOST` 填生产服务器的内网地址或别名。好处：
@@ -68,10 +93,18 @@ Host <生产服务器别名>
 
 两种走法都连不上时，脚本的 BLOCKED 提示会提醒：生产服务器不对外开放 22 端口，要用带 `ProxyJump` 的别名，或在开发服务器上运行。
 
-**待设计（搬迁前必须解决，本次不改 compose、不定方案）**：Documenso 搬到生产服务器后，staging 的 ERP 在另一台主机（开发服务器）上。现在 compose 只把应用发布在 `127.0.0.1:3010`，同主机的 ERP 靠 Docker 网络 `documenso-production_default` 直连。下面两件事都需要另行设计：
+**staging 经内网访问 Documenso（方向已定，搬迁前要准备好）**：Documenso 搬到生产服务器后，staging 的 ERP 在开发服务器上，不再和 Documenso 同主机。按业主给的方向，需要准备：
 
-- 跨主机的 staging ERP 怎么访问 Documenso 的 API；
-- Documenso 回调 staging ERP 用什么地址，涉及 webhook URL 和 SSRF bypass 设置。
+- **staging 访问 Documenso**：
+  - Documenso 仍只发布在生产服务器的 `127.0.0.1:3010`，compose 不改。
+  - 在生产服务器上，由主机的 nginx 加一个**只绑生产服务器内网地址**的监听（例如 `<生产服务器的内网地址>:<端口>`），转发到 `127.0.0.1:3010`。
+  - 安全组和防火墙只对开发服务器放行这个端口。
+  - staging ERP 的 Documenso 内部地址改成 `http://<生产服务器的内网地址>:<端口>`。
+  - 这份 nginx 配置属于主机配置，不在本仓库里。
+- **Documenso 回调 staging**：在 Documenso 里配给 staging 的 webhook URL，以及 `.env.production` 的 `NEXT_PRIVATE_WEBHOOK_SSRF_BYPASS_HOSTS`，都要改成开发服务器的内网地址，即 staging ERP 在内网上的回调监听。因为 Documenso 默认拒绝私网地址，所以 bypass 设置里必须列出它。
+- **生产 ERP 不变**：它和 Documenso 在同一台主机上，仍按容器名走 Docker 网络 `documenso-production_default`。
+
+以上只是方向，没有在任何主机上配置或验证过。
 
 ### 2. 镜像仓库（在公司发布时需要）
 
