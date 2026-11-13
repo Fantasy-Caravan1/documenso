@@ -65,7 +65,7 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 | 3 | `git fetch origin` 后 HEAD 等于 `origin/fantasy-production-overlay` | 开发机 |
 | 4 | 有目标主机（`SSH_HOST` 或 `ssh-host` 文件），格式合法 | 开发机 |
 | 5 | 选传输方式（仓库 / ssh） | 开发机 |
-| 6 | 本机 docker 可用（`docker info`） | 开发机 |
+| 6 | 本机 docker 可用（`docker info`）；Docker 内存 ≥ `BUILD_NODE_HEAP_MB` + 2048 MB | 开发机 |
 | 7 | ssh 能连（BatchMode，15 秒超时） | 开发机 |
 | 8 | `REMOTE_DIR`、compose 文件、env 文件存在；docker 可用 | 服务器（`MODE=preflight`） |
 | 9 | `documenso` 恰好一个容器在运行；`database` 在运行 | 服务器 |
@@ -80,12 +80,20 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 git archive <commit> | docker build --platform linux/amd64 \
   --label org.opencontainers.image.revision=<完整 sha> \
   --label org.opencontainers.image.version=<git describe> \
+  --build-arg NODE_OPTIONS=--max-old-space-size=<BUILD_NODE_HEAP_MB> \
   -f docker/Dockerfile -t documenso-fantasy:<12 位 sha> -
 ```
 
-构建上下文是 `git archive` 打出的提交本身，不是工作目录：`docker/Dockerfile` 第一步是 `COPY . .`，而 `.dockerignore` 不排除 `.turbo` 缓存和 `.gitignore` 里藏起来的本地文件。`docker/Dockerfile`、`docker/start.sh`、`docker/production/compose.yml` 都不改，提交号靠 label 记进镜像。
+构建上下文是 `git archive` 打出的提交本身，不是工作目录：`docker/Dockerfile` 第一步是 `COPY . .`，而 `.dockerignore` 不排除 `.turbo` 缓存和 `.gitignore` 里藏起来的本地文件。提交号靠 label 记进镜像。`docker/start.sh`、`docker/production/compose.yml` 不改；`docker/Dockerfile` 只改了一处，见下。
 
 服务器是 x86_64，Dockerfile 在 installer 阶段现场编译原生模块（aws-crt、sharp、canvas），runner 阶段直接拷 installer 的 `node_modules`，所以在 Apple Silicon 上整个构建都在模拟下跑。
+
+**Node 堆（`BUILD_NODE_HEAP_MB`，默认 4096）**：V8 的默认堆上限跟着可见内存走。Docker Desktop 的 VM 只有 8 GB 时，默认 old space 约 2 GB；2026-11-13 实测，remix 的 typecheck（`react-router typegen && tsc`）在 QEMU 模拟下跑了约 10 分钟后在 2040 MB 处堆耗尽（exit 134）。所以：
+
+- `docker/Dockerfile` 在 installer 阶段 `RUN turbo run build …` 前加了一行 `ARG NODE_OPTIONS`（带一行注释）。没有默认值、没有 `ENV`：不传 `--build-arg` 时和上游完全一样；传了只在构建期生效，不进最终镜像（runner 阶段没有这个 ARG）。这是 overlay 对 Dockerfile 的唯一改动，把 overlay 挪到新上游版本时记得带上。
+- `deploy.sh` 构建时传 `--build-arg NODE_OPTIONS=--max-old-space-size=$BUILD_NODE_HEAP_MB`，并在预检时要求 `docker info` 的 `MemTotal` ≥ `BUILD_NODE_HEAP_MB` + 2048 MB（留给内核、buildkit、模拟器和其他进程）。不够就 BLOCKED：在 Docker Desktop（Settings > Resources）调大内存，或调小 `BUILD_NODE_HEAP_MB`。
+
+**实测（2026-11-13，M3 / 16 GB，Docker Desktop 29.9.3，VM 8 GB，QEMU 模拟，`BUILD_NODE_HEAP_MB=4096`）**：构建成功，用时 1208 秒（约 20 分钟）。其中 `turbo run build` 用了 1098 秒（含 tsc）；`npm prune` 54 秒；runner 阶段的 `prisma generate` 24 秒。这次 `npm ci` 命中了上一次失败构建留下的缓存，冷构建时它约 158 秒，所以冷构建大约 23 分钟。镜像 1.38 GB，架构 amd64，revision label 正确，镜像的 env 和 history 里都没有 `NODE_OPTIONS`。在 `--network none` 的容器里检查过：sharp 0.34.5（libvips 8.17.3）、`@napi-rs/canvas`、`skia-canvas`、`aws-crt`、`@node-rs/bcrypt`、`@prisma/client` 都能加载；Prisma 的 musl query engine 能加载，schema engine 能运行。没有起完整应用，也没连数据库。
 
 ### [2/4] 传输
 
@@ -129,6 +137,7 @@ git archive <commit> | docker build --platform linux/amd64 \
 | `HEALTH_RETRIES` | `30` | 健康检查次数 |
 | `HEALTH_INTERVAL` | `5` | 每次间隔秒数 |
 | `MIGRATION_PREVIEW` | `1` | `0` 关闭迁移预览 |
+| `BUILD_NODE_HEAP_MB` | `4096` | 构建期 Node 的 `--max-old-space-size`（MB，整数，≥ 512）；Docker 内存需 ≥ 它 + 2048 MB |
 
 所有值在送到服务器前都按白名单字符校验，作为环境变量放在 `bash -s` 前面传过去，不进脚本的 argv。
 
@@ -147,6 +156,7 @@ git archive <commit> | docker build --platform linux/amd64 \
 | `BLOCKED: SSH_HOST is not an ssh destination` | 主机名里有不允许的字符 |
 | `BLOCKED: SHIP=registry, but the set-up is missing` / `SHIP must be …` | 仓库配置文件缺失 / SHIP 取值不对 |
 | `BLOCKED: docker is not running on this machine` | 启动 Docker Desktop |
+| `BLOCKED: Docker has N MB of memory; the build needs BUILD_NODE_HEAP_MB (…) + 2048 MB.` | 调大 Docker Desktop 内存，或调小 `BUILD_NODE_HEAP_MB` |
 | `BLOCKED: cannot reach … over ssh` | 主机、密钥、`~/.ssh/config` |
 | `BLOCKED: … does not exist on this host` / `… does not exist.` | 服务器上的 `REMOTE_DIR`、compose 文件或 env 文件不在 |
 | `BLOCKED: docker is not usable on this host by this user` | ssh 用户没有 docker 权限 |
@@ -227,6 +237,5 @@ bash -n deployment/deploy.sh deployment/deploy-remote.sh
 - 现在跑的 `documenso-fantasy:2.14.0-email-template` 是怎么建的没有记录，不确定它包含 overlay 的哪些提交（尤其后两个：空字段修复、`restart: unless-stopped`），也不确定自家 Prisma 迁移（只允许手写签名）是否已在生产库执行。首次用本流程发布时，迁移预览会列出待执行的迁移。
 - `BACKUP_DIR` 默认 `/opt/apps/Perri/backups/documenso-deploy`：ssh 用户能不能写、这块盘够不够放、是否已有别的 Documenso 数据库备份，都要在服务器上确认。
 - Docker Hub 仓库是否已建、是否私有。
-- 在 M3 上模拟构建的耗时和稳定性；Docker Desktop 的内存（8 GB）是否够。
 - 服务器上的 `docker compose` 版本是否支持 `ps --status`、`config --images`（Compose v2 都支持）。
 - ssh 连接在发布中途断开时：脚本已整体读入后才执行，自动回滚靠 bash 的 EXIT trap；断在 `up` 之后、健康检查之前时是否能完整回滚，没有在真机上验证过。
