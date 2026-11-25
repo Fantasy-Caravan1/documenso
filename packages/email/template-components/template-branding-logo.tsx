@@ -3,7 +3,7 @@ import { useBranding } from '../providers/branding';
 import { getSafeBrandingUrl } from '../utils/branding-url';
 
 const FANTASY_CARAVAN_BRAND_URL = 'https://fantasycaravan.com.au';
-const FANTASY_CARAVAN_LOGO_PATH = '/static/fantasy-logo-2026-email.png';
+export const FANTASY_CARAVAN_LOGO_PATH = '/static/fantasy-logo-2026-email.png';
 const FANTASY_CARAVAN_LOGO_WIDTH = 180;
 const FANTASY_CARAVAN_LOGO_HEIGHT = 68;
 

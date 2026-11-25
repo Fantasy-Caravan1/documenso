@@ -14,6 +14,7 @@ import { ZDefaultRecipientsSchema } from '@documenso/lib/types/default-recipient
 import { type TDocumentMetaDateFormat, ZDocumentMetaTimezoneSchema } from '@documenso/lib/types/document-meta';
 import { isPersonalLayout } from '@documenso/lib/utils/organisations';
 import { recipientAbbreviation } from '@documenso/lib/utils/recipient-formatter';
+import { getSigningInvitationIntro } from '@documenso/lib/utils/signing-invitation';
 import { extractTeamSignatureSettings } from '@documenso/lib/utils/teams';
 import { DocumentSignatureSettingsTooltip } from '@documenso/ui/components/document/document-signature-settings-tooltip';
 import { ExpirationPeriodPicker } from '@documenso/ui/components/document/expiration-period-picker';
@@ -106,8 +107,6 @@ export const DocumentPreferencesForm = ({
 
   const isPersonalLayoutMode = isPersonalLayout(organisations);
   const isPersonalOrganisation = currentOrganisation.type === OrganisationType.PERSONAL;
-
-  const placeholderEmail = user.email ?? 'user@example.com';
 
   const ZDocumentPreferencesFormSchema = z.object({
     documentVisibility: z.nativeEnum(DocumentVisibility).nullable(),
@@ -355,7 +354,7 @@ export const DocumentPreferencesForm = ({
               render={({ field }) => (
                 <FormItem className="flex-1">
                   <FormLabel>
-                    <Trans>Send on Behalf of Team</Trans>
+                    <Trans>Include sender details</Trans>
                   </FormLabel>
 
                   <FormControl>
@@ -391,29 +390,23 @@ export const DocumentPreferencesForm = ({
                     </Select>
                   </FormControl>
 
-                  <div className="pt-2">
-                    <div className="font-medium text-muted-foreground text-xs">
-                      <Trans>Preview</Trans>
+                  {field.value !== null && (
+                    <div className="pt-2">
+                      <div className="font-medium text-muted-foreground text-xs">
+                        <Trans>Preview</Trans>
+                      </div>
+                      <Alert variant="neutral" className="mt-1 px-2.5 py-1.5 text-sm">
+                        {_(
+                          getSigningInvitationIntro({
+                            organisationType: currentOrganisation.type,
+                            includeSenderDetails: field.value,
+                            inviterName: user.name,
+                            teamName: canInherit ? optionalTeam?.name : t`Team Name`,
+                          }),
+                        )}
+                      </Alert>
                     </div>
-
-                    <Alert variant="neutral" className="mt-1 px-2.5 py-1.5 text-sm">
-                      {field.value ? (
-                        <Trans>
-                          "{placeholderEmail}" on behalf of "Team Name" has invited you to sign "example document".
-                        </Trans>
-                      ) : (
-                        <Trans>"Team Name" has invited you to sign "example document".</Trans>
-                      )}
-                    </Alert>
-                  </div>
-
-                  <FormDescription>
-                    <Trans>
-                      Controls the formatting of the message that will be sent when inviting a recipient to sign a
-                      document. If a custom message has been provided while configuring the document, it will be used
-                      instead.
-                    </Trans>
-                  </FormDescription>
+                  )}
                 </FormItem>
               )}
             />

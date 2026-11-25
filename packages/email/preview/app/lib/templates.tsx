@@ -93,9 +93,12 @@ export const templates: Record<string, TemplateDefinition> = {
     group: 'Documents',
     component: DocumentInviteEmailTemplate,
     fields: {
-      inviterName: { type: 'text', label: 'Inviter name', default: 'Lucas Smith' },
-      inviterEmail: { type: 'text', label: 'Inviter email', default: 'lucas@documenso.com' },
+      recipientName: { ...recipientNameField, default: 'Lee' },
+      inviterName: { type: 'text', label: 'Inviter name', default: 'Fantasy Caravan' },
+      inviterEmail: { type: 'text', label: 'Inviter email', default: 'sender@example.invalid' },
       documentName: documentNameField,
+      signDocumentLink: { type: 'text', label: 'Signing link', default: 'https://sign.example.invalid/sign/preview' },
+      reportUrl: { type: 'text', label: 'Report link', default: 'https://sign.example.invalid/report/preview' },
       role: roleField,
       customBody: {
         type: 'textarea',

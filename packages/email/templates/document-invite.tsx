@@ -1,18 +1,23 @@
 import { RECIPIENT_ROLES_DESCRIPTION } from '@documenso/lib/constants/recipient-roles';
+import { getSigningInvitationDocumentName, getSigningInvitationIntro } from '@documenso/lib/utils/signing-invitation';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { Trans } from '@lingui/react/macro';
-import type { RecipientRole } from '@prisma/client';
-import { OrganisationType } from '@prisma/client';
+import { OrganisationType, RecipientRole } from '@prisma/client';
 
 import { Body, Container, Head, Hr, Html, Link, Preview, Section, Text } from '../components';
-import { TemplateBrandingLogo } from '../template-components/template-branding-logo';
+import { FANTASY_CARAVAN_LOGO_PATH, TemplateBrandingLogo } from '../template-components/template-branding-logo';
 import { TemplateCustomMessageBody } from '../template-components/template-custom-message-body';
 import type { TemplateDocumentInviteProps } from '../template-components/template-document-invite';
 import { TemplateDocumentInvite } from '../template-components/template-document-invite';
 import { TemplateFooter } from '../template-components/template-footer';
+import { TemplateSigningInvitation } from '../template-components/template-signing-invitation';
 
 export type DocumentInviteEmailTemplateProps = Partial<TemplateDocumentInviteProps> & {
+  documentName: string;
+  signDocumentLink: string;
+  recipientName?: string;
+  signingLogoSrc?: string;
   customBody?: string;
   role: RecipientRole;
   selfSigner?: boolean;
@@ -23,7 +28,27 @@ export type DocumentInviteEmailTemplateProps = Partial<TemplateDocumentInvitePro
   reportUrl?: string;
 };
 
-export const DocumentInviteEmailTemplate = ({
+export const DocumentInviteEmailTemplate = (props: DocumentInviteEmailTemplateProps) => {
+  if (props.role !== RecipientRole.SIGNER) {
+    return <DocumentActionInvitation {...props} />;
+  }
+
+  const logoSrc =
+    props.signingLogoSrc ??
+    (props.assetBaseUrl ? new URL(FANTASY_CARAVAN_LOGO_PATH, props.assetBaseUrl).href : FANTASY_CARAVAN_LOGO_PATH);
+
+  return (
+    <TemplateSigningInvitation
+      {...props}
+      documentName={getSigningInvitationDocumentName(props.documentName)}
+      recipientName={props.recipientName?.trim()}
+      introduction={getSigningInvitationIntro(props)}
+      logoSrc={logoSrc}
+    />
+  );
+};
+
+const DocumentActionInvitation = ({
   inviterName = 'Lucas Smith',
   inviterEmail = 'lucas@documenso.com',
   documentName = 'Open Source Pledge.pdf',

@@ -1,30 +1,17 @@
-import DocumentInviteEmailTemplate from '@documenso/email/templates/document-invite';
 import { isRecipientEmailValidForSending } from '@documenso/lib/utils/recipients';
 import { prisma } from '@documenso/prisma';
-import { msg } from '@lingui/core/macro';
-import {
-  DocumentSource,
-  DocumentStatus,
-  EnvelopeType,
-  OrganisationType,
-  RecipientRole,
-  SendStatus,
-} from '@prisma/client';
-import { createElement } from 'react';
+import { DocumentStatus, EnvelopeType, RecipientRole, SendStatus } from '@prisma/client';
 
-import { getI18nInstance } from '../../../client-only/providers/i18n-server';
-import { NEXT_PUBLIC_WEBAPP_URL } from '../../../constants/app';
-import { RECIPIENT_ROLE_TO_EMAIL_TYPE, RECIPIENT_ROLES_DESCRIPTION } from '../../../constants/recipient-roles';
+import { RECIPIENT_ROLE_TO_EMAIL_TYPE } from '../../../constants/recipient-roles';
 import { buildEnvelopeEmailHeaders } from '../../../server-only/email/build-envelope-email-headers';
 import { getEmailContext } from '../../../server-only/email/get-email-context';
+import { renderDocumentInvitation } from '../../../server-only/email/render-document-invitation';
 import { assertOrganisationRatesAndLimits } from '../../../server-only/rate-limit/assert-organisation-rates-and-limits';
 import { updateRecipientNextReminder } from '../../../server-only/recipient/update-recipient-next-reminder';
 import { DOCUMENT_AUDIT_LOG_TYPE } from '../../../types/document-audit-logs';
 import { extractDerivedDocumentEmailSettings } from '../../../types/document-email';
 import { createDocumentAuditLogData } from '../../../utils/document-audit-logs';
 import { unsafeBuildEnvelopeIdQuery } from '../../../utils/envelope';
-import { renderCustomEmailTemplate } from '../../../utils/render-custom-email-template';
-import { renderEmailWithI18N } from '../../../utils/render-email-with-i18n';
 import type { JobRunIO } from '../../client/_internal/job';
 import type { TSendSigningEmailJobDefinition } from './send-signing-email';
 
@@ -75,8 +62,6 @@ export const run = async ({ payload, io }: { payload: TSendSigningEmailJobDefini
     }),
   ]);
 
-  const { documentMeta, team } = envelope;
-
   if (recipient.role === RecipientRole.CC) {
     return;
   }
@@ -89,18 +74,7 @@ export const run = async ({ payload, io }: { payload: TSendSigningEmailJobDefini
     return;
   }
 
-  const {
-    branding,
-    emailLanguage,
-    settings,
-    organisationType,
-    senderEmail,
-    replyToEmail,
-    organisationId,
-    claims,
-    emailsDisabled,
-    emailTransport,
-  } = await getEmailContext({
+  const emailContext = await getEmailContext({
     emailType: 'RECIPIENT',
     source: {
       type: 'team',
@@ -109,81 +83,14 @@ export const run = async ({ payload, io }: { payload: TSendSigningEmailJobDefini
     meta: envelope.documentMeta,
   });
 
+  const { organisationId, claims, emailsDisabled, senderEmail, replyToEmail, emailTransport } = emailContext;
+
   // Don't send signing invitations if the organisation has email sending disabled or the owner is disabled (e.g. banned).
   if (envelope.user.disabled || emailsDisabled) {
     return;
   }
 
-  const customEmail = envelope?.documentMeta;
-  const isDirectTemplate = envelope.source === DocumentSource.TEMPLATE_DIRECT_LINK;
-
   const recipientEmailType = RECIPIENT_ROLE_TO_EMAIL_TYPE[recipient.role];
-
-  const { email, name } = recipient;
-  const selfSigner = email === user.email;
-
-  const i18n = await getI18nInstance(emailLanguage);
-
-  const recipientActionVerb = i18n._(RECIPIENT_ROLES_DESCRIPTION[recipient.role].actionVerb).toLowerCase();
-
-  let emailMessage = customEmail?.message || '';
-  let emailSubject = i18n._(msg`Please ${recipientActionVerb} this document`);
-
-  if (selfSigner) {
-    emailMessage = i18n._(
-      msg`You have initiated the document ${`"${envelope.title}"`} that requires you to ${recipientActionVerb} it.`,
-    );
-    emailSubject = i18n._(msg`Please ${recipientActionVerb} your document`);
-  }
-
-  if (isDirectTemplate) {
-    emailMessage = i18n._(
-      msg`A document was created by your direct template that requires you to ${recipientActionVerb} it.`,
-    );
-    emailSubject = i18n._(msg`Please ${recipientActionVerb} this document created by your direct template`);
-  }
-
-  if (organisationType === OrganisationType.ORGANISATION) {
-    emailSubject = i18n._(msg`${team.name} invited you to ${recipientActionVerb} a document`);
-    emailMessage = customEmail?.message ?? '';
-
-    if (!emailMessage) {
-      const inviterName = user.name || '';
-
-      emailMessage = i18n._(
-        settings.includeSenderDetails
-          ? msg`${inviterName} on behalf of "${team.name}" has invited you to ${recipientActionVerb} the document "${envelope.title}".`
-          : msg`${team.name} has invited you to ${recipientActionVerb} the document "${envelope.title}".`,
-      );
-    }
-  }
-
-  const customEmailTemplate = {
-    'signer.name': name,
-    'signer.email': email,
-    'document.name': envelope.title,
-  };
-
-  const assetBaseUrl = NEXT_PUBLIC_WEBAPP_URL() || 'http://localhost:3000';
-  const signDocumentLink = `${NEXT_PUBLIC_WEBAPP_URL()}/sign/${recipient.token}`;
-  const reportUrl = `${NEXT_PUBLIC_WEBAPP_URL()}/report/${recipient.token}`;
-
-  const template = createElement(DocumentInviteEmailTemplate, {
-    documentName: envelope.title,
-    inviterName: user.name || undefined,
-    inviterEmail:
-      organisationType === OrganisationType.ORGANISATION ? team?.teamEmail?.email || user.email : user.email,
-    assetBaseUrl,
-    signDocumentLink,
-    customBody: renderCustomEmailTemplate(emailMessage, customEmailTemplate),
-    role: recipient.role,
-    selfSigner,
-    organisationType,
-    teamName: team?.name,
-    teamEmail: team?.teamEmail?.email,
-    includeSenderDetails: settings.includeSenderDetails,
-    reportUrl,
-  });
 
   if (isRecipientEmailValidForSending(recipient)) {
     try {
@@ -206,14 +113,7 @@ export const run = async ({ payload, io }: { payload: TSendSigningEmailJobDefini
     }
 
     await io.runTask('send-signing-email', async () => {
-      const [html, text] = await Promise.all([
-        renderEmailWithI18N(template, { lang: emailLanguage, branding }),
-        renderEmailWithI18N(template, {
-          lang: emailLanguage,
-          branding,
-          plainText: true,
-        }),
-      ]);
+      const invitation = await renderDocumentInvitation({ envelope, recipient, user, context: emailContext });
 
       await emailTransport.sendMail({
         to: {
@@ -222,9 +122,7 @@ export const run = async ({ payload, io }: { payload: TSendSigningEmailJobDefini
         },
         from: senderEmail,
         replyTo: replyToEmail,
-        subject: renderCustomEmailTemplate(documentMeta?.subject || emailSubject, customEmailTemplate),
-        html,
-        text,
+        ...invitation,
         headers: buildEnvelopeEmailHeaders({
           userId,
           envelopeId: envelope.id,

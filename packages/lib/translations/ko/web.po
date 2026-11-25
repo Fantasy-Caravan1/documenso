@@ -45,10 +45,6 @@ msgstr "“{documentName}” 문서가 서명되었습니다."
 msgid "“{documentName}” was signed by all signers"
 msgstr "“{documentName}” 문서가 모든 서명자에게서 서명을 완료했습니다."
 
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "\"{placeholderEmail}\" on behalf of \"Team Name\" has invited you to sign \"example document\"."
-msgstr "\"{placeholderEmail}\"이(가) \"Team Name\"을(를) 대신하여 \"example document\"에 서명하도록 귀하를 초대했습니다."
-
 #: apps/remix/app/components/dialogs/envelope-cancel-dialog.tsx
 msgid "\"{title}\" has been successfully cancelled"
 msgstr "\"{title}\" 문서가 성공적으로 취소되었습니다."
@@ -60,10 +56,6 @@ msgstr "\"{title}\"이(가) 성공적으로 삭제되었습니다."
 #: apps/remix/app/components/dialogs/envelope-delete-dialog.tsx
 msgid "\"{title}\" has been successfully hidden"
 msgstr "\"{title}\"이(가) 성공적으로 숨겨졌습니다"
-
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "\"Team Name\" has invited you to sign \"example document\"."
-msgstr "\"Team Name\"이(가) \"example document\"에 서명하도록 귀하를 초대했습니다."
 
 #. placeholder {0}: warning.line
 #: apps/remix/app/routes/_authenticated+/o.$orgUrl.settings.branding.tsx
@@ -296,12 +288,12 @@ msgstr "{0} 필드"
 
 #. placeholder {0}: team.name
 #. placeholder {1}: envelope.title
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{0} has invited you to {recipientActionVerb} the document \"{1}\"."
 msgstr "{0}에서 \"{1}\" 문서에 대해 귀하께 {recipientActionVerb}하도록 초대했습니다."
 
 #. placeholder {0}: team.name
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{0} invited you to {recipientActionVerb} a document"
 msgstr "{0}이(가) 귀하께 문서에 {recipientActionVerb}하도록 초대했습니다."
 
@@ -314,9 +306,9 @@ msgid "{0} of {1} documents remaining this month."
 msgstr "이번 달 남은 문서 {1}개 중 {0}개."
 
 #. placeholder {0}: user.name || user.email
-#. placeholder {1}: envelope.team.name
+#. placeholder {1}: team.name
 #. placeholder {2}: envelope.title
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{0} on behalf of \"{1}\" has invited you to {recipientActionVerb} the document \"{2}\"."
 msgstr "{0}이(가) \"{1}\"을(를) 대신하여 \"{2}\" 문서에 대해 귀하께 {recipientActionVerb}하도록 초대했습니다."
 
@@ -399,7 +391,7 @@ msgstr "{inviterName}이(가) 귀하를 문서에서 제거했습니다<0/>\"{do
 
 #. placeholder {0}: team.name
 #. placeholder {1}: envelope.title
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{inviterName} on behalf of \"{0}\" has invited you to {recipientActionVerb} the document \"{1}\"."
 msgstr "{inviterName}이(가) \"{0}\"을(를) 대신하여 \"{1}\" 문서에 대해 귀하께 {recipientActionVerb}하도록 초대했습니다."
 
@@ -473,6 +465,10 @@ msgstr "{remaningLength, plural, other {#자 남음}}"
 #: apps/remix/app/components/tables/envelopes-table-bulk-action-bar.tsx
 msgid "{selectedCount} selected"
 msgstr "{selectedCount}개 선택함"
+
+#: packages/lib/utils/signing-invitation.ts
+msgid "{senderName} sent you a document to sign."
+msgstr "{senderName}의 문서 서명 요청이 도착했습니다."
 
 #: packages/email/template-components/template-document-rejected.tsx
 msgid "{signerName} has rejected the document \"{documentName}\"."
@@ -965,7 +961,7 @@ msgstr "확인 이메일을 발송했으며, 곧 받은 편지함에서 확인�
 msgid "A device capable of accessing, opening, and reading documents"
 msgstr "문서에 접근하고 열람 및 읽을 수 있는 장치"
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "A document was created by your direct template that requires you to {recipientActionVerb} it."
 msgstr "귀하의 다이렉트 템플릿에서 생성된 문서가 있으며, 이 문서에 {recipientActionVerb}해야 합니다."
 
@@ -3167,10 +3163,6 @@ msgstr "업로드된 문서의 기본 언어를 제어합니다. 이 언어는 �
 #: apps/remix/app/components/forms/document-preferences-form.tsx
 msgid "Controls the default visibility of an uploaded document."
 msgstr "업로드된 문서의 기본 공개 범위를 제어합니다."
-
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "Controls the formatting of the message that will be sent when inviting a recipient to sign a document. If a custom message has been provided while configuring the document, it will be used instead."
-msgstr "수신자에게 문서 서명을 요청할 때 전송되는 메시지의 형식을 제어합니다. 문서를 구성할 때 사용자 지정 메시지를 입력하면 그 메시지가 대신 사용됩니다."
 
 #: apps/remix/app/components/general/envelope-editor/envelope-editor-settings-dialog.tsx
 #: packages/ui/primitives/document-flow/add-settings.tsx
@@ -6085,6 +6077,14 @@ msgstr "보조자가 마지막 서명자인 경우, 이후 서명자가 없기 �
 msgid "Height:"
 msgstr "높이:"
 
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Hello {recipientName},"
+msgstr "{recipientName}님, 안녕하세요."
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Hello,"
+msgstr "안녕하세요."
+
 #: apps/remix/app/components/embed/embed-document-signing-page-v1.tsx
 msgid "Help complete the document for other signers."
 msgstr "다른 서명자들을 대신해 문서를 완료하도록 도와주세요."
@@ -6330,6 +6330,7 @@ msgstr "필드 포함"
 msgid "Include Recipients"
 msgstr "수신자 포함"
 
+#: apps/remix/app/components/forms/document-preferences-form.tsx
 #: apps/remix/app/components/general/admin-global-settings-section.tsx
 msgid "Include sender details"
 msgstr "발신자 정보 포함"
@@ -8226,15 +8227,15 @@ msgstr "문서 \"{documentName}\"을(를) {0}해 주세요<0/>"
 msgid "Please {action} your document {documentName}"
 msgstr "문서 {documentName}을(를) {action}해 주세요."
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Please {recipientActionVerb} this document"
 msgstr "이 문서를 {recipientActionVerb}해 주세요."
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Please {recipientActionVerb} this document created by your direct template"
 msgstr "귀하의 다이렉트 템플릿에서 생성된 이 문서를 {recipientActionVerb}해 주세요."
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Please {recipientActionVerb} your document"
 msgstr "귀하의 문서를 {recipientActionVerb}해 주세요."
 
@@ -8331,6 +8332,10 @@ msgstr "전체 이름을 입력하세요"
 #: apps/remix/app/components/dialogs/sign-field-initials-dialog.tsx
 msgid "Please enter your initials"
 msgstr "이니셜을 입력하세요"
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Please keep this link private."
+msgstr "이 링크를 다른 사람과 공유하지 마세요."
 
 #: apps/remix/app/components/general/document-signing/document-signing-mobile-widget.tsx
 msgid "Please mark as viewed to complete"
@@ -8970,15 +8975,17 @@ msgstr "비밀번호가 기억나시나요? <0>로그인</0>"
 msgid "Reminder to {action} {documentName}"
 msgstr "{documentName} {action} 알림"
 
+#. placeholder {0}: copy.subject
 #. placeholder {0}: envelope.documentMeta.subject
 #: packages/lib/jobs/definitions/internal/process-signing-reminder.handler.ts
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: {0}"
 msgstr "알림: {0}"
 
 #. placeholder {0}: envelope.team.name
+#. placeholder {0}: team.name
 #: packages/lib/jobs/definitions/internal/process-signing-reminder.handler.ts
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: {0} invited you to {recipientActionVerb} a document"
 msgstr "알림: {0}에서 문서에 {recipientActionVerb}하도록 초대했습니다."
 
@@ -8992,11 +8999,11 @@ msgstr "알림: 문서를 {0}하세요<0/>\"{documentName}\""
 msgid "Reminder: Please {recipientActionVerb} the document \"{0}\""
 msgstr "알림: \"{0}\" 문서를 {recipientActionVerb}해 주세요"
 
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: Please {recipientActionVerb} this document"
 msgstr "알림: 이 문서를 {recipientActionVerb}해 주세요."
 
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: Please {recipientActionVerb} your document"
 msgstr "알림: 귀하의 문서를 {recipientActionVerb}해 주세요."
 
@@ -9109,6 +9116,10 @@ msgstr "이메일 회신 <0>(선택 사항)</0>"
 #: apps/remix/app/routes/_recipient+/report.$token.tsx
 msgid "Report sender"
 msgstr "발신자 신고하기"
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Report this request"
+msgstr "이 요청 신고"
 
 #: apps/remix/app/routes/_recipient+/report.$token.tsx
 msgid "Report this sender?"
@@ -9308,6 +9319,10 @@ msgstr "로그인 화면으로 돌아가기"
 #: apps/remix/app/components/general/envelope-editor/envelope-editor.tsx
 msgid "Return to templates"
 msgstr "템플릿으로 돌아가기"
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Review & sign"
+msgstr "검토 후 서명"
 
 #: packages/email/templates/organisation-account-link-confirmation.tsx
 msgid "Review request"
@@ -9764,10 +9779,6 @@ msgstr "봉투 보내기"
 msgid "Send first reminder after"
 msgstr "첫 알림 전송 시점"
 
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "Send on Behalf of Team"
-msgstr "팀을 대신해 발송"
-
 #: packages/ui/components/document/document-email-checkboxes.tsx
 msgid "Send recipient expired email to the owner"
 msgstr "소유자에게 수신자 만료 이메일 보내기"
@@ -10063,6 +10074,10 @@ msgstr "서명이 너무 작습니다."
 #: apps/remix/app/components/forms/profile.tsx
 msgid "Signature Pad cannot be empty."
 msgstr "서명 패드는 비워 둘 수 없습니다."
+
+#: packages/lib/server-only/email/render-document-invitation.ts
+msgid "Signature requested — {documentName}"
+msgstr "서명 요청 — {documentName}"
 
 #: apps/remix/app/components/general/envelope-editor/envelope-editor-fields-page.tsx
 msgid "Signature Settings"
@@ -10744,6 +10759,7 @@ msgid "Team Memberships"
 msgstr "팀 멤버십"
 
 #: apps/remix/app/components/dialogs/team-create-dialog.tsx
+#: apps/remix/app/components/forms/document-preferences-form.tsx
 #: apps/remix/app/components/forms/team-update-form.tsx
 #: apps/remix/app/components/tables/organisation-insights-table.tsx
 msgid "Team Name"
@@ -13758,6 +13774,10 @@ msgstr "이메일 기본 설정은 여기에서 관리할 수 있습니다."
 msgid "You can only detect fields in draft envelopes"
 msgstr "필드는 초안 봉투에서만 감지할 수 있습니다."
 
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "You can read the full document before signing."
+msgstr "서명하기 전에 문서 전체를 읽어 볼 수 있습니다."
+
 #: packages/email/templates/confirm-team-email.tsx
 msgid "You can revoke access at any time in your team settings on Documenso <0>here</0>."
 msgstr "언제든지 Documenso의 팀 설정에서 <0>여기</0>에서 액세스를 취소할 수 있습니다."
@@ -13897,6 +13917,10 @@ msgstr "더 이상 이 문서에 서명할 필요가 없습니다."
 msgid "You failed to validate a 2FA token for the document"
 msgstr "문서에 대한 2FA 토큰 검증에 실패했습니다"
 
+#: packages/lib/utils/signing-invitation.ts
+msgid "You have a document to sign."
+msgstr "서명할 문서가 도착했습니다."
+
 #. placeholder {0}: data.organisationName
 #: apps/remix/app/routes/_unauthenticated+/organisation.invite.$token.tsx
 msgid "You have accepted an invitation from <0>{0}</0> to join their organisation."
@@ -13936,8 +13960,7 @@ msgid "You have declined the invitation from <0>{0}</0> to join their organisati
 msgstr "<0>{0}</0> 조직의 초대를 거절했습니다."
 
 #. placeholder {0}: `"${envelope.title}"`
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "You have initiated the document {0} that requires you to {recipientActionVerb} it."
 msgstr "귀하가 시작한 문서 {0}에 {recipientActionVerb}해야 합니다."
 

@@ -45,10 +45,6 @@ msgstr "\"{documentName}\" is ondertekend"
 msgid "“{documentName}” was signed by all signers"
 msgstr "\"{documentName}\" is door alle ondertekenaars ondertekend"
 
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "\"{placeholderEmail}\" on behalf of \"Team Name\" has invited you to sign \"example document\"."
-msgstr "\"{placeholderEmail}\" heeft namens \"Team Name\" je uitgenodigd om \"example document\" te ondertekenen."
-
 #: apps/remix/app/components/dialogs/envelope-cancel-dialog.tsx
 msgid "\"{title}\" has been successfully cancelled"
 msgstr "\"{title}\" is succesvol geannuleerd."
@@ -60,10 +56,6 @@ msgstr "\"{title}\" is succesvol verwijderd"
 #: apps/remix/app/components/dialogs/envelope-delete-dialog.tsx
 msgid "\"{title}\" has been successfully hidden"
 msgstr "\"{title}\" is succesvol verborgen"
-
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "\"Team Name\" has invited you to sign \"example document\"."
-msgstr "\"Team Name\" heeft je uitgenodigd om \"example document\" te ondertekenen."
 
 #. placeholder {0}: warning.line
 #: apps/remix/app/routes/_authenticated+/o.$orgUrl.settings.branding.tsx
@@ -296,12 +288,12 @@ msgstr "{0}-veld"
 
 #. placeholder {0}: team.name
 #. placeholder {1}: envelope.title
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{0} has invited you to {recipientActionVerb} the document \"{1}\"."
 msgstr "{0} heeft je uitgenodigd om het document \"{1}\" te {recipientActionVerb}."
 
 #. placeholder {0}: team.name
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{0} invited you to {recipientActionVerb} a document"
 msgstr "{0} heeft je uitgenodigd om een document te {recipientActionVerb}"
 
@@ -314,9 +306,9 @@ msgid "{0} of {1} documents remaining this month."
 msgstr "{0} van {1} documenten resterend deze maand."
 
 #. placeholder {0}: user.name || user.email
-#. placeholder {1}: envelope.team.name
+#. placeholder {1}: team.name
 #. placeholder {2}: envelope.title
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{0} on behalf of \"{1}\" has invited you to {recipientActionVerb} the document \"{2}\"."
 msgstr "{0} heeft namens \"{1}\" je uitgenodigd om het document \"{2}\" te {recipientActionVerb}."
 
@@ -399,7 +391,7 @@ msgstr "{inviterName} heeft je verwijderd uit het document<0/>\"{documentName}\"
 
 #. placeholder {0}: team.name
 #. placeholder {1}: envelope.title
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "{inviterName} on behalf of \"{0}\" has invited you to {recipientActionVerb} the document \"{1}\"."
 msgstr "{inviterName} heeft namens \"{0}\" je uitgenodigd om het document \"{1}\" te {recipientActionVerb}."
 
@@ -473,6 +465,10 @@ msgstr "{remaningLength, plural, one {# teken resterend} other {# tekens restere
 #: apps/remix/app/components/tables/envelopes-table-bulk-action-bar.tsx
 msgid "{selectedCount} selected"
 msgstr "{selectedCount} geselecteerd"
+
+#: packages/lib/utils/signing-invitation.ts
+msgid "{senderName} sent you a document to sign."
+msgstr "{senderName} heeft je een document gestuurd om te ondertekenen."
 
 #: packages/email/template-components/template-document-rejected.tsx
 msgid "{signerName} has rejected the document \"{documentName}\"."
@@ -965,7 +961,7 @@ msgstr "Er is een bevestigingsmail verzonden; deze zou binnenkort in je inbox mo
 msgid "A device capable of accessing, opening, and reading documents"
 msgstr "Een apparaat dat toegang kan krijgen tot documenten, deze kan openen en lezen"
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "A document was created by your direct template that requires you to {recipientActionVerb} it."
 msgstr "Er is een document aangemaakt via je directe sjabloon dat je moet {recipientActionVerb}."
 
@@ -3167,10 +3163,6 @@ msgstr "Bepaalt de standaardtaal van een geüpload document. Dit wordt gebruikt 
 #: apps/remix/app/components/forms/document-preferences-form.tsx
 msgid "Controls the default visibility of an uploaded document."
 msgstr "Bepaalt de standaardzichtbaarheid van een geüpload document."
-
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "Controls the formatting of the message that will be sent when inviting a recipient to sign a document. If a custom message has been provided while configuring the document, it will be used instead."
-msgstr "Bepaalt de opmaak van het bericht dat wordt verzonden bij het uitnodigen van een ontvanger om een document te ondertekenen. Als er tijdens het configureren van het document een aangepast bericht is opgegeven, wordt dat gebruikt."
 
 #: apps/remix/app/components/general/envelope-editor/envelope-editor-settings-dialog.tsx
 #: packages/ui/primitives/document-flow/add-settings.tsx
@@ -6085,6 +6077,14 @@ msgstr "Als een assistent de laatste ondertekenaar is, kan hij/zij geen actie on
 msgid "Height:"
 msgstr "Hoogte:"
 
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Hello {recipientName},"
+msgstr "Beste {recipientName},"
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Hello,"
+msgstr "Hallo,"
+
 #: apps/remix/app/components/embed/embed-document-signing-page-v1.tsx
 msgid "Help complete the document for other signers."
 msgstr "Help het document voor andere ondertekenaars te voltooien."
@@ -6330,6 +6330,7 @@ msgstr "Velden opnemen"
 msgid "Include Recipients"
 msgstr "Ontvangers opnemen"
 
+#: apps/remix/app/components/forms/document-preferences-form.tsx
 #: apps/remix/app/components/general/admin-global-settings-section.tsx
 msgid "Include sender details"
 msgstr "Afzendergegevens bijvoegen"
@@ -8226,15 +8227,15 @@ msgstr "{0} je document<0/>\"{documentName}\""
 msgid "Please {action} your document {documentName}"
 msgstr "{action} je document {documentName}"
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Please {recipientActionVerb} this document"
 msgstr "{recipientActionVerb} dit document"
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Please {recipientActionVerb} this document created by your direct template"
 msgstr "{recipientActionVerb} dit document dat is aangemaakt via je directe sjabloon"
 
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Please {recipientActionVerb} your document"
 msgstr "{recipientActionVerb} je document"
 
@@ -8331,6 +8332,10 @@ msgstr "Voer je volledige naam in"
 #: apps/remix/app/components/dialogs/sign-field-initials-dialog.tsx
 msgid "Please enter your initials"
 msgstr "Vul je initialen in"
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Please keep this link private."
+msgstr "Houd deze link privé."
 
 #: apps/remix/app/components/general/document-signing/document-signing-mobile-widget.tsx
 msgid "Please mark as viewed to complete"
@@ -8970,15 +8975,17 @@ msgstr "Weet je je wachtwoord weer? <0>Log in</0>"
 msgid "Reminder to {action} {documentName}"
 msgstr "Herinnering om {action} {documentName}"
 
+#. placeholder {0}: copy.subject
 #. placeholder {0}: envelope.documentMeta.subject
 #: packages/lib/jobs/definitions/internal/process-signing-reminder.handler.ts
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: {0}"
 msgstr "Herinnering: {0}"
 
 #. placeholder {0}: envelope.team.name
+#. placeholder {0}: team.name
 #: packages/lib/jobs/definitions/internal/process-signing-reminder.handler.ts
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: {0} invited you to {recipientActionVerb} a document"
 msgstr "Herinnering: {0} heeft je uitgenodigd om een document te {recipientActionVerb}"
 
@@ -8992,11 +8999,11 @@ msgstr "Herinnering: Gelieve {0} uw document<0/>\"{documentName}\""
 msgid "Reminder: Please {recipientActionVerb} the document \"{0}\""
 msgstr "Herinnering: Gelieve het document \"{0}\" te {recipientActionVerb}"
 
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: Please {recipientActionVerb} this document"
 msgstr "Herinnering: {recipientActionVerb} dit document"
 
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "Reminder: Please {recipientActionVerb} your document"
 msgstr "Herinnering: {recipientActionVerb} je document"
 
@@ -9109,6 +9116,10 @@ msgstr "Antwoord op e-mail <0>(optioneel)</0>"
 #: apps/remix/app/routes/_recipient+/report.$token.tsx
 msgid "Report sender"
 msgstr "Afzender rapporteren"
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Report this request"
+msgstr "Dit verzoek melden"
 
 #: apps/remix/app/routes/_recipient+/report.$token.tsx
 msgid "Report this sender?"
@@ -9308,6 +9319,10 @@ msgstr "Terug naar inloggen"
 #: apps/remix/app/components/general/envelope-editor/envelope-editor.tsx
 msgid "Return to templates"
 msgstr "Terug naar sjablonen"
+
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "Review & sign"
+msgstr "Bekijken en ondertekenen"
 
 #: packages/email/templates/organisation-account-link-confirmation.tsx
 msgid "Review request"
@@ -9764,10 +9779,6 @@ msgstr "Envelope verzenden"
 msgid "Send first reminder after"
 msgstr "Eerste herinnering verzenden na"
 
-#: apps/remix/app/components/forms/document-preferences-form.tsx
-msgid "Send on Behalf of Team"
-msgstr "Verzenden namens team"
-
 #: packages/ui/components/document/document-email-checkboxes.tsx
 msgid "Send recipient expired email to the owner"
 msgstr "Stuur e-mail over verlopen ondertekenaar naar de eigenaar"
@@ -10063,6 +10074,10 @@ msgstr "Handtekening is te klein"
 #: apps/remix/app/components/forms/profile.tsx
 msgid "Signature Pad cannot be empty."
 msgstr "Handtekeningveld mag niet leeg zijn."
+
+#: packages/lib/server-only/email/render-document-invitation.ts
+msgid "Signature requested — {documentName}"
+msgstr "Verzoek om ondertekening — {documentName}"
 
 #: apps/remix/app/components/general/envelope-editor/envelope-editor-fields-page.tsx
 msgid "Signature Settings"
@@ -10744,6 +10759,7 @@ msgid "Team Memberships"
 msgstr "Teamlidmaatschappen"
 
 #: apps/remix/app/components/dialogs/team-create-dialog.tsx
+#: apps/remix/app/components/forms/document-preferences-form.tsx
 #: apps/remix/app/components/forms/team-update-form.tsx
 #: apps/remix/app/components/tables/organisation-insights-table.tsx
 msgid "Team Name"
@@ -13758,6 +13774,10 @@ msgstr "Je kunt hier je e-mailvoorkeuren beheren."
 msgid "You can only detect fields in draft envelopes"
 msgstr "U kunt alleen velden detecteren in concept-enveloppen"
 
+#: packages/email/template-components/template-signing-invitation.tsx
+msgid "You can read the full document before signing."
+msgstr "Je kunt het hele document lezen voordat je het ondertekent."
+
 #: packages/email/templates/confirm-team-email.tsx
 msgid "You can revoke access at any time in your team settings on Documenso <0>here</0>."
 msgstr "Je kunt de toegang op elk moment intrekken in je teaminstellingen op Documenso, <0>hier</0>."
@@ -13897,6 +13917,10 @@ msgstr "Je hoeft het niet meer te ondertekenen."
 msgid "You failed to validate a 2FA token for the document"
 msgstr "Je kon een 2FA-token voor het document niet valideren"
 
+#: packages/lib/utils/signing-invitation.ts
+msgid "You have a document to sign."
+msgstr "Er staat een document voor je klaar om te ondertekenen."
+
 #. placeholder {0}: data.organisationName
 #: apps/remix/app/routes/_unauthenticated+/organisation.invite.$token.tsx
 msgid "You have accepted an invitation from <0>{0}</0> to join their organisation."
@@ -13936,8 +13960,7 @@ msgid "You have declined the invitation from <0>{0}</0> to join their organisati
 msgstr "Je hebt de uitnodiging van <0>{0}</0> om lid te worden van hun organisatie geweigerd."
 
 #. placeholder {0}: `"${envelope.title}"`
-#: packages/lib/jobs/definitions/emails/send-signing-email.handler.ts
-#: packages/lib/server-only/document/resend-document.ts
+#: packages/lib/server-only/email/render-document-invitation.ts
 msgid "You have initiated the document {0} that requires you to {recipientActionVerb} it."
 msgstr "Je hebt het document {0} gestart dat je moet {recipientActionVerb}."
 

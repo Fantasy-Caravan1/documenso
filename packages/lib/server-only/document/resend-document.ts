@@ -1,34 +1,27 @@
-import { DocumentInviteEmailTemplate } from '@documenso/email/templates/document-invite';
 import { resolveExpiresAt } from '@documenso/lib/constants/envelope-expiration';
-import { RECIPIENT_ROLE_TO_EMAIL_TYPE, RECIPIENT_ROLES_DESCRIPTION } from '@documenso/lib/constants/recipient-roles';
+import { RECIPIENT_ROLE_TO_EMAIL_TYPE } from '@documenso/lib/constants/recipient-roles';
 import { AppError } from '@documenso/lib/errors/app-error';
 import { DOCUMENT_AUDIT_LOG_TYPE } from '@documenso/lib/types/document-audit-logs';
 import type { ApiRequestMetadata } from '@documenso/lib/universal/extract-request-metadata';
 import { createDocumentAuditLogData } from '@documenso/lib/utils/document-audit-logs';
-import { renderCustomEmailTemplate } from '@documenso/lib/utils/render-custom-email-template';
 import { prisma } from '@documenso/prisma';
-import { msg } from '@lingui/core/macro';
 import {
   DocumentStatus,
   EnvelopeType,
-  OrganisationType,
   RecipientRole,
   SendStatus,
   SigningStatus,
   WebhookTriggerEvents,
 } from '@prisma/client';
-import { createElement } from 'react';
 
-import { getI18nInstance } from '../../client-only/providers/i18n-server';
-import { NEXT_PUBLIC_WEBAPP_URL } from '../../constants/app';
 import { extractDerivedDocumentEmailSettings } from '../../types/document-email';
 import { mapEnvelopeToWebhookDocumentPayload, ZWebhookDocumentSchema } from '../../types/webhook-payload';
 import { isDocumentCompleted } from '../../utils/document';
 import type { EnvelopeIdOptions } from '../../utils/envelope';
 import { isRecipientEmailValidForSending } from '../../utils/recipients';
-import { renderEmailWithI18N } from '../../utils/render-email-with-i18n';
 import { buildEnvelopeEmailHeaders } from '../email/build-envelope-email-headers';
 import { getEmailContext } from '../email/get-email-context';
+import { renderDocumentInvitation } from '../email/render-document-invitation';
 import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 import { assertOrganisationRatesAndLimits } from '../rate-limit/assert-organisation-rates-and-limits';
 import { updateRecipientNextReminder } from '../recipient/update-recipient-next-reminder';
@@ -166,17 +159,7 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
     return envelope;
   }
 
-  const {
-    branding,
-    emailLanguage,
-    organisationType,
-    senderEmail,
-    replyToEmail,
-    organisationId,
-    claims,
-    emailsDisabled,
-    emailTransport,
-  } = await getEmailContext({
+  const emailContext = await getEmailContext({
     emailType: 'RECIPIENT',
     source: {
       type: 'team',
@@ -184,6 +167,8 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
     },
     meta: envelope.documentMeta,
   });
+
+  const { organisationId, claims, emailsDisabled, senderEmail, replyToEmail, emailTransport } = emailContext;
 
   // Don't resend any emails if the organisation has email sending disabled.
   if (user.disabled || emailsDisabled) {
@@ -204,72 +189,15 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
         return;
       }
 
-      const i18n = await getI18nInstance(emailLanguage);
-
       const recipientEmailType = RECIPIENT_ROLE_TO_EMAIL_TYPE[recipient.role];
-
       const { email, name } = recipient;
-      const selfSigner = email === user.email;
-
-      const recipientActionVerb = i18n._(RECIPIENT_ROLES_DESCRIPTION[recipient.role].actionVerb).toLowerCase();
-
-      let emailMessage = envelope.documentMeta.message || '';
-      let emailSubject = i18n._(msg`Reminder: Please ${recipientActionVerb} this document`);
-
-      if (selfSigner) {
-        emailMessage = i18n._(
-          msg`You have initiated the document ${`"${envelope.title}"`} that requires you to ${recipientActionVerb} it.`,
-        );
-        emailSubject = i18n._(msg`Reminder: Please ${recipientActionVerb} your document`);
-      }
-
-      if (organisationType === OrganisationType.ORGANISATION) {
-        emailSubject = i18n._(msg`Reminder: ${envelope.team.name} invited you to ${recipientActionVerb} a document`);
-        emailMessage =
-          envelope.documentMeta.message ||
-          i18n._(
-            msg`${user.name || user.email} on behalf of "${envelope.team.name}" has invited you to ${recipientActionVerb} the document "${envelope.title}".`,
-          );
-      }
-
-      const customEmailTemplate = {
-        'signer.name': name,
-        'signer.email': email,
-        'document.name': envelope.title,
-      };
-
-      const assetBaseUrl = NEXT_PUBLIC_WEBAPP_URL() || 'http://localhost:3000';
-      const signDocumentLink = `${NEXT_PUBLIC_WEBAPP_URL()}/sign/${recipient.token}`;
-      const reportUrl = `${NEXT_PUBLIC_WEBAPP_URL()}/report/${recipient.token}`;
-
-      const template = createElement(DocumentInviteEmailTemplate, {
-        documentName: envelope.title,
-        inviterName: user.name || undefined,
-        inviterEmail:
-          organisationType === OrganisationType.ORGANISATION
-            ? envelope.team?.teamEmail?.email || user.email
-            : user.email,
-        assetBaseUrl,
-        signDocumentLink,
-        customBody: renderCustomEmailTemplate(emailMessage, customEmailTemplate),
-        role: recipient.role,
-        selfSigner,
-        organisationType,
-        teamName: envelope.team?.name,
-        reportUrl,
+      const invitation = await renderDocumentInvitation({
+        envelope,
+        recipient,
+        user,
+        context: emailContext,
+        isReminder: true,
       });
-
-      const [html, text] = await Promise.all([
-        renderEmailWithI18N(template, {
-          lang: emailLanguage,
-          branding,
-        }),
-        renderEmailWithI18N(template, {
-          lang: emailLanguage,
-          branding,
-          plainText: true,
-        }),
-      ]);
 
       // Send email outside any transaction to avoid holding a connection
       // open during network I/O.
@@ -280,11 +208,7 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
         },
         from: senderEmail,
         replyTo: replyToEmail,
-        subject: envelope.documentMeta.subject
-          ? renderCustomEmailTemplate(i18n._(msg`Reminder: ${envelope.documentMeta.subject}`), customEmailTemplate)
-          : emailSubject,
-        html,
-        text,
+        ...invitation,
         headers: buildEnvelopeEmailHeaders({
           userId: envelope.userId,
           envelopeId: envelope.id,
