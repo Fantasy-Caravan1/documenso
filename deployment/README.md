@@ -1,117 +1,87 @@
 # Fantasy Documenso 发布流程
 
-在开发机上构建镜像，送到服务器，只替换应用容器。
+构建镜像，送到目标主机，只替换应用容器。目标主机可以是另一台机器（经 ssh），也可以是运行脚本的这台机器本身（目标 `local`）。每次发布都是镜像发布：目标主机上只换镜像，不拉代码、不现场构建。
 
 ```bash
 deployment/deploy.sh production
 ```
 
-- `deployment/deploy.sh`：开发机端，macOS 自带的 bash 3.2 可跑。
-- `deployment/deploy-remote.sh`：服务器端，由 `deploy.sh` 经 ssh 管道送过去执行（`bash -s`），服务器上不留副本。不要手工运行。
+- `deployment/deploy.sh`：发起发布的机器（下文“本机”）上运行，macOS 自带的 bash 3.2 可跑。
+- `deployment/deploy-remote.sh`：目标主机端，由 `deploy.sh` 经 ssh 管道送过去执行（`bash -s`）；目标是 `local` 时直接交给本机的 bash。目标主机上不留副本。不要手工运行。
 - `deployment/__tests__/`：两个脚本的测试，见文末。
 
 > **这套 Documenso 由生产和 staging 两边的 ERP 共用。** 发布时应用容器会重建，签字页面、ERP 发起签字、webhook 回调都会中断几十秒（启动时还要跑迁移，有新迁移时更久）。挑没人签字的时候发。
 
-这个仓库是公开的：脚本和本文不写服务器地址、仓库账号、任何密钥。这些都放在开发机的 `~/.config/fantasy-documenso/` 里，见下。
+**没有 staging 环境的 Documenso。** 只有生产这一套，`deploy.sh` 也只认 `production`。
 
-## 一次性准备（开发机）
+这个仓库是公开的：脚本和本文不写服务器地址、仓库账号、任何密钥。这些都放在本机的 `~/.config/fantasy-documenso/` 里，见下。
+
+## 现在的布局（2026-11-28）
+
+- **开发服务器**：所有发布都从这里发起，在 checkout `/workspace/Documenso-dev/documenso`（分支 `fantasy-production-overlay`）里运行 `deployment/deploy.sh production`。构建是原生 x86，不经模拟。
+- **生产服务器**：从开发服务器用 ssh 别名 `prod`（用户 `ubuntu`）登录。Documenso 跑在这里。运行目录 `/srv/documenso/`，里面是 `compose.yml`、`.env.production` 和 `restore/` 文件夹。**它不是 git checkout**，脚本也不需要它是：主机上只要有 compose 文件和 env 文件（以及 compose 挂载的证书）。
+- 容器名 `documenso-production-documenso-1`、网络 `documenso-production_default` 不能变：ERP 以外部网络方式接在这个网络上，并按容器名调用。
+- 原先跑 Documenso 的旧服务器和它的 `/opt/apps/…` 路径已在退役，脚本的默认值不再指向它们。
+
+脚本里各项默认值就是这个布局：`REMOTE_DIR=/srv/documenso`，compose 文件是其中的 `compose.yml`，备份在 `/srv/documenso/backups`。
+
+## 一次性准备（本机）
 
 ### 1. 目标主机
 
-二选一：
+按顺序找，取第一个有值的：
+
+1. 环境变量 `SSH_HOST`（只对这一次生效）；
+2. `~/.config/fantasy-documenso/production-host`（一行）；
+3. `~/.config/fantasy-documenso/ssh-host`（旧文件名，仍然读）。
+
+都没有时脚本 BLOCKED，提示写 `production-host`。取值：
+
+- `local`：目标就是本机。预检、发布和所有主机端检查都在本机执行，不用 ssh，镜像不传输（本机构建完就在本机的 docker 里）。这时不能设 `SHIP`。
+- 其他值：ssh 目标。可以是 `~/.ssh/config` 里的别名、`user@host`、主机名或 IP；不能含空白、引号或 `$`。ssh 要能免密码登录（脚本用 `BatchMode=yes`），登录用户要能直接用 docker（不经 sudo）、能写 `BACKUP_DIR`。
+
+### 从开发服务器发到生产服务器（主路径）
+
+在开发服务器上一次性配好：
 
 ```bash
-# 长期：写进配置文件（一行，ssh 目标或 ~/.ssh/config 里的别名）
 mkdir -p ~/.config/fantasy-documenso
-echo '<ssh 目标或别名>' > ~/.config/fantasy-documenso/ssh-host
-
-# 临时：只对这一次生效
-SSH_HOST=<ssh 目标或别名> deployment/deploy.sh production
+echo prod > ~/.config/fantasy-documenso/production-host   # ~/.ssh/config 里的别名，用户 ubuntu
 ```
 
-没有默认值。两处都没有时脚本 BLOCKED 并提示怎么配。可以填 `~/.ssh/config` 里的别名（例如带 `ProxyJump` 的，见下面“目标拓扑”）、`user@host`、主机名或 IP；不能含空白、引号或 `$`。ssh 要能免密码登录（脚本用 `BatchMode=yes`），登录用户要能用 docker、能写 `BACKUP_DIR`。
+每次发布：
 
-### 目标拓扑：生产服务器不对外开放 ssh
-
-计划中的布局。生产服务器和开发服务器**都是新建的机器**；现在跑这套 Documenso 的服务器是第三台，即下文的“旧服务器”，搬迁完成后退出。
-
-- **生产服务器**（新）：跑 Documenso，以及 ERP 和 club 的生产容器。22 端口不对外开放。和开发服务器在同一内网。前提：它仍能出网，可以从 Docker Hub 拉 `postgres:15`，走仓库传输时也能从私有仓库拉镜像。
-- **开发服务器**（新，也是 staging 服务器）：可以从外面 ssh，跑 ERP 和 club 的 staging，经内网访问生产服务器上的 Documenso（见下面的“staging 经内网访问 Documenso”）。
-- **开发机**：开发可能迁到本地，在本地构建镜像，经开发服务器送到生产服务器。
-- 到生产服务器的登录和文件传输都经过开发服务器。有两种走法，**走法一是主路径**。
-
-**如果 staging 服务器是旧服务器的完整复制（可能这么做，未定）**，复制出来的机器开机时会带着：
-
-- 这套 Documenso 的应用容器和数据库容器。compose 里是 `restart: unless-stopped`，开机后会自己起来。
-- 数据卷 `documenso-production_database` 的一份副本。
-
-这等于出现了**第二个带着生产数据的 Documenso 实例**。它可能用同一份 SMTP 凭证发信，也可能用同一张签署证书签出文件。Documenso 的生产实例只应存在于生产服务器上。所以在复制品联网之前，要把它上面的以下东西停用并删除：
-
-- 应用容器、数据库容器、数据卷；
-- `/opt/apps/Perri/documenso/documenso/.env.production`；
-- 签署证书 `/opt/documenso/cert.p12`。
-
-做之前要确认：
-
-- 复制的方式能不能做到“先断网开机、处理完再联网”；
-- 复制品上还有哪些服务带 `restart` 策略，会跟着自己起来（ERP、club 的生产容器同理）；
-- 旧服务器上的数据库备份（`BACKUP_DIR`）要不要一并删除。
-
-这里只是提醒，脚本不做这件事。
-
-**走法一（主路径）：从开发机经跳板。** 在开发机的 `~/.ssh/config` 里给生产服务器配一个别名，`HostName` 写它的内网地址，`ProxyJump` 指向开发服务器：
-
-```sshconfig
-Host <开发服务器别名>
-    HostName <开发服务器的公网地址或域名>
-    User <用户>
-    IdentityFile ~/.ssh/<密钥>
-
-Host <生产服务器别名>
-    HostName <生产服务器的内网地址>
-    User <用户>
-    IdentityFile ~/.ssh/<密钥>
-    ProxyJump <开发服务器别名>
+```bash
+cd /workspace/Documenso-dev/documenso
+git fetch origin && git switch --detach origin/fantasy-production-overlay   # 或本地同名分支、已和 origin 一致
+deployment/deploy.sh production
 ```
 
-然后把 `SSH_HOST`（或 `~/.config/fantasy-documenso/ssh-host`）填成 `<生产服务器别名>`。脚本照常 `ssh <别名>`，不需要知道跳板的存在。拷证书、`.env.production`、备份时用 `scp`，同样写这个别名。
+两台机器在同一内网：测速会判快，镜像经 ssh 管道传过去，不需要配镜像仓库。
 
-本地构建后：
+### 在目标机器本身上发（目标 `local`）
 
-- 在公司网络下，测速判慢，镜像本体走 Docker Hub 私有仓库，由生产服务器自己拉。经跳板走的只是命令通道（预检、发布、仓库的 pull token）。
-- 不在公司时，测速判快，镜像经跳板走 ssh 管道。
+在要跑 Documenso 的那台机器上放一份 `fantasy-production-overlay` 的干净 checkout，然后：
 
-测速逻辑不变。经跳板时，瓶颈是开发机到开发服务器这一段（内网那一段快得多），测速量到的就是这一段，所以“在公司走仓库、在外面走 ssh”的结论照样成立。
+```bash
+SSH_HOST=local deployment/deploy.sh production
+# 或长期：echo local > ~/.config/fantasy-documenso/production-host
+```
 
-**走法二：直接在开发服务器上发。** 在开发服务器上放一份 `fantasy-production-overlay` 的干净 checkout，在那里运行 `deployment/deploy.sh production`，`SSH_HOST` 填生产服务器的内网地址或别名。好处：
+checkout 只是构建用的，和运行目录（`REMOTE_DIR`，默认 `/srv/documenso`）是两回事。主机端的检查（compose 项目、磁盘用 GNU `df`、备份目录、健康检查）照常在这台机器上跑，所以它要是 Linux。发完后本机的 `documenso-fantasy:<sha>` 等 tag 就是主机的 tag，第 [4/4] 步不删。
 
-- 构建是原生 x86，不经模拟；
-- 传输走内网，测速会判快，自动走 ssh 管道；
-- 不依赖开发机的网络。
+### 生产 ERP 和 Documenso
 
-前提见上面“传输方式”一节里同内网主机那一条。
+ERP 和 Documenso 在同一台主机上，按容器名走 Docker 网络 `documenso-production_default`。
 
-两种走法都连不上时，脚本的 BLOCKED 提示会提醒：生产服务器不对外开放 22 端口，要用带 `ProxyJump` 的别名，或在开发服务器上运行。
-
-**staging 经内网访问 Documenso（方向已定，搬迁前要准备好）**：Documenso 搬到生产服务器后，staging 的 ERP 在开发服务器上，不再和 Documenso 同主机。按业主给的方向，需要准备：
-
-- **staging 访问 Documenso**：
-  - Documenso 仍只发布在生产服务器的 `127.0.0.1:3010`，compose 不改。
-  - 在生产服务器上，由主机的 nginx 加一个**只绑生产服务器内网地址**的监听（例如 `<生产服务器的内网地址>:<端口>`），转发到 `127.0.0.1:3010`。
-  - 安全组和防火墙只对开发服务器放行这个端口。
-  - staging ERP 的 Documenso 内部地址改成 `http://<生产服务器的内网地址>:<端口>`。
-  - 这份 nginx 配置属于主机配置，不在本仓库里。
-- **Documenso 回调 staging**：在 Documenso 里配给 staging 的 webhook URL，以及 `.env.production` 的 `NEXT_PRIVATE_WEBHOOK_SSRF_BYPASS_HOSTS`，都要改成开发服务器的内网地址，即 staging ERP 在内网上的回调监听。因为 Documenso 默认拒绝私网地址，所以 bypass 设置里必须列出它。
-- **生产 ERP 不变**：它和 Documenso 在同一台主机上，仍按容器名走 Docker 网络 `documenso-production_default`。
-
-以上只是方向，没有在任何主机上配置或验证过。
+staging 的 ERP 在开发服务器上，不和 Documenso 同主机，经内网访问这套 Documenso；那边的 nginx 监听、防火墙和 webhook 回调地址属于主机配置，不在本仓库里，也不在本流程里。
 
 ### 2. 镜像仓库（在公司发布时需要）
 
-办公网对 22 端口上行限速（实测 ssh 40 KB/s，HTTPS 7.4 MB/s），Documenso 镜像有 1 GB 量级，从公司走 ssh 管道要几个小时。所以在公司发布需要 Docker Hub 私有仓库：
+主路径（开发服务器 → 生产服务器，同一内网）用不到这一节。只有从办公网里的机器直接发时才需要。办公网对 22 端口上行限速（实测 ssh 40 KB/s，HTTPS 7.4 MB/s），Documenso 镜像有 1 GB 量级，从公司走 ssh 管道要几个小时。所以在公司发布需要 Docker Hub 私有仓库：
 
 1. 在 Docker Hub 上**先**建一个**私有**仓库（push 到不存在的仓库会自动建成公开的，脚本会拦下这种情况，但别依赖它）。
-2. 开发机 `docker login`，用能 push 的 token。
+2. 本机 `docker login`，用能 push 的 token。
 3. 建一个只读（pull）token，写进配置：
 
 ```bash
@@ -133,9 +103,10 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 
 三种情况：
 
+- 目标是 `local` 时不传输，也不测速。
 - **不在公司**（家里、外面）：ssh 上行正常，测速判快，走 ssh 管道。不用配仓库。
 - **在公司**：22 端口被限速，测速判慢，走 Docker Hub 仓库，需要先按上一节配好。没配就 BLOCKED。
-- **从和目标同一内网的 AWS 主机发**：`SSH_HOST` 用目标的内网地址，测速判快，走 ssh 管道（内网 scp 级速度）。那台主机是 x86_64，构建是原生的、不经模拟（上游说约两分钟），`docker info` 的内存检查取到的是整机内存，逻辑照样成立。前提：那台主机要有 docker（含 buildx）、git、perl，有 `fantasy-production-overlay` 的干净 checkout，并且能 ssh 到目标、在目标上直接用 docker。脚本没有只在 macOS 上成立的写法（`stat` 先试 GNU 形式，测速用后台进程加 kill，不依赖 `timeout`）。
+- **从和目标同一内网的主机发（开发服务器就是）**：`SSH_HOST` 用目标的内网地址或别名，测速判快，走 ssh 管道（内网 scp 级速度）。那台主机是 x86_64，构建是原生的、不经模拟（上游说约两分钟），`docker info` 的内存检查取到的是整机内存，逻辑照样成立。前提：那台主机要有 docker（含 buildx）、git、perl，有 `fantasy-production-overlay` 的干净 checkout，并且能 ssh 到目标、在目标上直接用 docker。脚本没有只在 macOS 上成立的写法（`stat` 先试 GNU 形式，测速用后台进程加 kill，不依赖 `timeout`）。
 
 
 ## 发布前
@@ -143,7 +114,7 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 1. 改动已合进 `fantasy-production-overlay` 并**已推送**到 `origin`。
 2. 本机切到它：`git switch --detach origin/fantasy-production-overlay`（或本地同名分支、已和 origin 一致）。
 3. 工作区干净。
-4. Docker Desktop 在运行，磁盘够（构建全程在 amd64 模拟下进行，慢，见“已知的未确认项”）。
+4. 本机 docker 在运行，磁盘够。在 Apple Silicon 上构建全程在 amd64 模拟下进行，慢；开发服务器是 x86，原生构建。
 
 ## 每一步做什么
 
@@ -151,15 +122,15 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 
 | 顺序 | 检查 | 在哪 |
 |---|---|---|
-| 1 | 参数必须是 `production` | 开发机 |
-| 2 | 工作区干净 | 开发机 |
-| 3 | `git fetch origin` 后 HEAD 等于 `origin/fantasy-production-overlay` | 开发机 |
-| 4 | 有目标主机（`SSH_HOST` 或 `ssh-host` 文件），格式合法 | 开发机 |
-| 5 | `SHIP` 取值；`SHIP=registry` 时仓库配置文件都在 | 开发机 |
-| 6 | 本机 docker 可用（`docker info`）；Docker 内存 ≥ `BUILD_NODE_HEAP_MB` + 2048 MB | 开发机 |
-| 7 | ssh 能连（BatchMode，15 秒超时） | 开发机 |
-| 7a | 没设 `SHIP` 时测 ssh 上行速度并选传输方式；慢且没配仓库就 BLOCKED。在服务器端预检之前，所以 `FIRST_RELEASE=1` 时也在起数据库、查空库之前 | 开发机 → 服务器 |
-| 8 | `REMOTE_DIR`、compose 文件、env 文件存在；docker 可用 | 服务器（`MODE=preflight`） |
+| 1 | 参数必须是 `production` | 本机 |
+| 2 | 工作区干净 | 本机 |
+| 3 | `git fetch origin` 后 HEAD 等于 `origin/fantasy-production-overlay` | 本机 |
+| 4 | 有目标主机（`SSH_HOST`、`production-host` 或 `ssh-host` 文件），格式合法；`local` 表示本机 | 本机 |
+| 5 | `SHIP` 取值；`SHIP=registry` 时仓库配置文件都在；目标是 `local` 时不能设 `SHIP` | 本机 |
+| 6 | 本机 docker 可用（`docker info`）；Docker 内存 ≥ `BUILD_NODE_HEAP_MB` + 2048 MB | 本机 |
+| 7 | ssh 能连（BatchMode，15 秒超时）；目标是 `local` 时跳过 | 本机 |
+| 7a | 没设 `SHIP` 且目标不是 `local` 时测 ssh 上行速度并选传输方式；慢且没配仓库就 BLOCKED。在服务器端预检之前，所以 `FIRST_RELEASE=1` 时也在起数据库、查空库之前 | 本机 → 服务器 |
+| 8 | `REMOTE_DIR`、compose 文件、env 文件存在；docker 可用。`REMOTE_DIR` 不需要是 git checkout | 服务器（`MODE=preflight`；`local` 时在本机） |
 | 9 | 应用容器：没设 `FIRST_RELEASE` 时必须存在且恰好一个在运行；设了 `FIRST_RELEASE=1` 时必须不存在 | 服务器 |
 | 9a | `database`：在运行 → 通过；容器在但停着 → BLOCKED（不替人启动）；容器没了但卷 `<项目名>_database` 还在 → BLOCKED（给只起数据库的命令）；容器和卷都没有 → 没设 `FIRST_RELEASE` 时 BLOCKED，设了则留到第 12a 步启动 | 服务器 |
 | 10 | 运行中的应用容器是从 `documenso-fantasy:<tag>` 启动的，且 compose 文件现在仍写这个引用 | 服务器 |
@@ -167,7 +138,7 @@ pull token 不是同一个账号的时候，用 `REGISTRY_USER=<账号>` 指定�
 | 10a | 仅 `FIRST_RELEASE=1`：compose 引用的镜像 tag 从 `compose config --images` 里取唯一的 `documenso-fantasy:<tag>`；compose 文件里挂载的宿主机路径（证书）都存在 | 服务器 |
 | 12 | `BACKUP_DIR` 能建、能写 | 服务器 |
 | 12a | 仅 `FIRST_RELEASE=1`：`database` 没有容器时 `docker compose … up -d database`（**预检里唯一改动主机的一步**，只起这一个服务），等 healthcheck 变 healthy；然后查库里 `_prisma_migrations` 是否有记录。空库 → BLOCKED，除非 `ALLOW_EMPTY_DATABASE=1` | 服务器 |
-| 13 | 走仓库时：仓库格式、token 文件 600、匿名访问不是 200（不是公开仓库）、pull token 能换到 JWT、带 token 访问返回 200 且 `is_private: true` | 开发机 |
+| 13 | 走仓库时：仓库格式、token 文件 600、匿名访问不是 200（不是公开仓库）、pull token 能换到 JWT、带 token 访问返回 200 且 `is_private: true` | 本机 |
 
 ### [1/4] 构建
 
@@ -179,7 +150,7 @@ git archive <commit> | docker build --platform linux/amd64 \
   -f docker/Dockerfile -t documenso-fantasy:<12 位 sha> -
 ```
 
-构建上下文是 `git archive` 打出的提交本身，不是工作目录：`docker/Dockerfile` 第一步是 `COPY . .`，而 `.dockerignore` 不排除 `.turbo` 缓存和 `.gitignore` 里藏起来的本地文件。提交号靠 label 记进镜像。`docker/start.sh`、`docker/production/compose.yml` 不改；`docker/Dockerfile` 只改了一处，见下。
+构建在运行 `deploy.sh` 的机器上做，用的是那里的 checkout。构建上下文是 `git archive` 打出的提交本身，不是工作目录：`docker/Dockerfile` 第一步是 `COPY . .`，而 `.dockerignore` 不排除 `.turbo` 缓存和 `.gitignore` 里藏起来的本地文件。提交号靠 label 记进镜像。`docker/start.sh`、`docker/production/compose.yml` 不改；`docker/Dockerfile` 只改了一处，见下。
 
 服务器是 x86_64，Dockerfile 在 installer 阶段现场编译原生模块（aws-crt、sharp、canvas），runner 阶段直接拷 installer 的 `node_modules`，所以在 Apple Silicon 上整个构建都在模拟下跑。
 
@@ -194,6 +165,7 @@ git archive <commit> | docker build --platform linux/amd64 \
 
 - **仓库**：本机打成 `<repo>:documenso-production-<sha>` 推上去；服务器在临时 `DOCKER_CONFIG` 里用只读 token 登录（token 走 ssh 的 stdin，不进命令行，拉完即删配置），`pull` 后改名为 `documenso-fantasy:<sha>`，删掉仓库名的 tag。
 - **ssh**：`docker save | gzip -1 | ssh … 'gunzip | docker load'`，带进度条，两端都不落盘。
+- **目标是 `local`**：不传输，镜像构建完就在本机。
 
 ### [3/4] 服务器上发布（`deploy-remote.sh`，`MODE=release`）
 
@@ -203,7 +175,7 @@ git archive <commit> | docker build --platform linux/amd64 \
 4. **备份数据库**：`docker exec` 进 `database` 容器，用它自己的 `POSTGRES_USER` / `POSTGRES_DB` 跑 `pg_dump`（变量在容器里展开，口令不出现在命令行或输出里），gzip 后写到 `BACKUP_DIR/documenso-<UTC 时间>-<sha>.sql.gz`，权限 600。校验 gzip 完整，且结尾有 pg_dump 的 `dump complete` 标记。失败就删掉半成品、撤掉回滚点 tag、退出，**什么都没改**。之后只保留最近 `BACKUP_KEEP` 份（只删本脚本命名格式的文件）。
 5. **改 tag**：新镜像打成 compose 文件里写死的引用（目前是 `documenso-fantasy:2.14.0-email-template`；从运行中容器的 `.Config.Image` 读，不在脚本里写死）。从这里起，任何非正常退出都会自动回滚。
 6. **迁移预览**（`MIGRATION_PREVIEW=1`，默认开）：`docker compose run --rm --no-deps -T documenso npx prisma migrate status`，用新镜像起一个一次性容器，环境变量由 compose 自己注入，脚本不经手数据库 URL。输出里的任何 URL 都会被替换成 `<url>`。只打印、不判定（有待执行迁移时 prisma 本身就是非零退出）。
-7. **切换**：`docker compose --env-file .env.production -f docker/production/compose.yml up -d --no-deps --force-recreate documenso`。只重建应用服务；**绝不 `down`，不碰 `database` 服务和它的卷**。项目名、服务名、容器名 `documenso-production-documenso-1`、网络 `documenso-production_default` 都不变（ERP 以外部网络方式接在这个网络上，并按容器名调用）。
+7. **切换**：在 `REMOTE_DIR` 里 `docker compose --env-file .env.production -f compose.yml up -d --no-deps --force-recreate documenso`。只重建应用服务；**绝不 `down`，不碰 `database` 服务和它的卷**。项目名、服务名、容器名 `documenso-production-documenso-1`、网络 `documenso-production_default` 都不变（ERP 以外部网络方式接在这个网络上，并按容器名调用）。
 8. **健康检查**（最多 `HEALTH_RETRIES` 次，每次间隔 `HEALTH_INTERVAL` 秒；容器启动时要先跑迁移）：
    - `http://127.0.0.1:${APP_PORT}/api/health` 返回 200，且顶层 `status` 不是 `error`（证书缺失时是 `warning`，算通过）；
    - 运行中的应用容器的 image id 等于新镜像的 id（证明真的换了版本）；
@@ -213,21 +185,21 @@ git archive <commit> | docker build --platform linux/amd64 \
 
 ### [4/4] 清理本机
 
-删掉本机上这次的 `documenso-fantasy:<12 位 sha>` 和仓库名 tag。只删 12 位十六进制 tag，本机上 `documenso-fantasy` 的其他 tag 不动。发布失败时脚本在这之前就退出了，本机镜像留着，重试时不用重新构建（`docker build` 命中缓存）。
+目标是 `local` 时跳过：本机就是主机，这些 tag 是主机的（第 [3/4] 步保留了本次 sha 的 tag）。其他情况：删掉本机上这次的 `documenso-fantasy:<12 位 sha>` 和仓库名 tag。只删 12 位十六进制 tag，本机上 `documenso-fantasy` 的其他 tag 不动。发布失败时脚本在这之前就退出了，本机镜像留着，重试时不用重新构建（`docker build` 命中缓存）。
 
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `SSH_HOST` | 无（读 `~/.config/fantasy-documenso/ssh-host`） | ssh 目标或别名 |
-| `SHIP` | 自动（测速） | `registry` 或 `ssh`；设了就不测速 |
+| `SSH_HOST` | 无（依次读 `~/.config/fantasy-documenso/production-host`、`ssh-host`） | ssh 目标或别名；`local` = 本机 |
+| `SHIP` | 自动（测速）；`local` 时不传输 | `registry` 或 `ssh`；设了就不测速；目标是 `local` 时不能设 |
 | `SSH_PROBE_MB` | `8` | 测速送多少 MB（整数，≥ 1） |
 | `SSH_PROBE_SECONDS` | `8` | 测速限时秒数（整数，≥ 1） |
 | `REGISTRY_USER` | 仓库名斜杠前的部分 | pull token 所属账号 |
-| `REMOTE_DIR` | `/opt/apps/Perri/documenso/documenso` | 服务器上 Documenso checkout，compose 命令在这里执行 |
-| `COMPOSE_FILE` | `docker/production/compose.yml` | 相对 `REMOTE_DIR` |
+| `REMOTE_DIR` | `/srv/documenso` | 主机上的运行目录，compose 命令在这里执行；只需放 compose 文件和 env 文件，不必是 git checkout |
+| `COMPOSE_FILE` | `compose.yml` | 相对 `REMOTE_DIR`；内容是仓库 `docker/production/compose.yml` 的一份拷贝 |
 | `ENV_FILE` | `.env.production` | 相对 `REMOTE_DIR`，手工维护，脚本只检查存在、不读内容 |
-| `BACKUP_DIR` | `/opt/apps/Perri/backups/documenso-deploy` | 必须在 `REMOTE_DIR` 之外；目录 700、文件 600 |
+| `BACKUP_DIR` | `/srv/documenso/backups` | 可以在 `REMOTE_DIR` 里面；目录 700、文件 600 |
 | `BACKUP_KEEP` | `5` | 保留的备份份数 |
 | `MIN_FREE_GB` | `8` | 服务器 docker 数据盘最少剩余 |
 | `APP_PORT` | `3010` | 宿主机上应用端口（只用于健康检查） |
@@ -249,11 +221,11 @@ git archive <commit> | docker build --platform linux/amd64 \
 | `usage: deployment/deploy.sh production` | 没写环境名 |
 | `BLOCKED: unknown environment '…'` | 只有 `production` |
 | `BLOCKED: REMOTE_DIR / BACKUP_DIR / COMPOSE_FILE / ENV_FILE must be …`、`… must be a whole number` | 环境变量格式不对 |
-| `BLOCKED: BACKUP_DIR must be outside REMOTE_DIR` | 备份不能放进 checkout |
 | `BLOCKED: working tree not clean` | 先提交推送或 stash |
 | `BLOCKED: git fetch origin fantasy-production-overlay failed` | 网络或权限问题，无法确认提交已推送 |
 | `BLOCKED: HEAD (…) is not origin/fantasy-production-overlay (…)` | 只发布已推送的 overlay 最新提交；切过去或先推送 |
-| `BLOCKED: no target host` | 配 `SSH_HOST` 或 `ssh-host` 文件 |
+| `BLOCKED: no target host` | 配 `SSH_HOST` 或 `~/.config/fantasy-documenso/production-host` |
+| `BLOCKED: SHIP=… means nothing for the local target` | 目标是 `local` 时不传输，去掉 `SHIP` |
 | `BLOCKED: SSH_HOST is not an ssh destination` | 主机名里有不允许的字符 |
 | `BLOCKED: SHIP=registry, but the set-up is missing` / `SHIP must be …` | 仓库配置文件缺失 / SHIP 取值不对 |
 | `BLOCKED: the ssh upload to … is slow (…), and this machine is not set up for the registry:` | ssh 上行太慢又没配仓库。配好 `~/.config/fantasy-documenso/dockerhub-repo` 和 `dockerhub-pull-token`，或明知很慢仍走 ssh：`SHIP=ssh deployment/deploy.sh production` |
@@ -303,28 +275,27 @@ git archive <commit> | docker build --platform linux/amd64 \
 ### 1. 新服务器上先放好
 
 - docker 和 docker compose v2；ssh 用户能直接用 docker（不经 sudo）。
-- `REMOTE_DIR`（默认 `/opt/apps/Perri/documenso/documenso`）下的 `docker/production/compose.yml`（overlay 版本），以及手工维护的 `.env.production`。
+- `REMOTE_DIR`（默认 `/srv/documenso`）下的 `compose.yml`（仓库 `docker/production/compose.yml` 的 overlay 版本拷贝），以及手工维护的 `.env.production`。不需要 git checkout。
 - 签名证书 `/opt/documenso/cert.p12`，即 compose 里挂载的路径。首次发布会检查 compose 文件里挂载的宿主机路径是否存在。这一步读的是 compose 文件原文，不是 `docker compose config`，所以不会打印 env 的值。
 - `BACKUP_DIR` 能写。
 
-证书、`.env.production`、数据库备份这几样文件，从旧服务器经内网 scp 到新服务器最快。新服务器不对外开放 ssh 时，用“目标拓扑”里配的别名（经开发服务器跳板）。在开发机上通过两个别名中转：
+证书、`.env.production`、数据库备份这几样文件，在能同时 ssh 到两台机器的开发服务器上用 `scp` 中转，走内网：
 
 ```bash
-# <旧服务器别名>、<生产服务器别名> 都是 ~/.ssh/config 里的别名；后者带 ProxyJump
-scp -3 <旧服务器别名>:/opt/apps/Perri/documenso/documenso/.env.production \
-       <生产服务器别名>:/opt/apps/Perri/documenso/documenso/.env.production
-scp -3 <旧服务器别名>:/opt/documenso/cert.p12 <生产服务器别名>:/tmp/cert.p12   # 再在生产服务器上放到 /opt/documenso/ 并设好权限
+# <旧主机别名> 是 ~/.ssh/config 里的别名；<旧运行目录> 是旧主机上 compose 命令执行的目录
+scp -3 <旧主机别名>:<旧运行目录>/.env.production prod:/srv/documenso/.env.production
+scp -3 <旧主机别名>:/opt/documenso/cert.p12 prod:/tmp/cert.p12   # 再在生产服务器上放到 /opt/documenso/ 并设好权限
 ```
 
-或者在能同时 ssh 到两台机器的开发服务器上直接 `scp`，走内网，最快。传完检查两个文件的权限：`.env.production` 和证书都只给需要的用户读。
+传完检查两个文件的权限：`.env.production` 和证书都只给需要的用户读。
 
 ### 2. 搬数据（新建实例时跳过，改用 `ALLOW_EMPTY_DATABASE=1`）
 
 旧服务器上取一份备份。可以直接用最近一次发布留下的 `BACKUP_DIR/documenso-*.sql.gz`；要最新的数据，就先停掉旧应用，免得备份之后又有新签字：
 
 ```bash
-cd /opt/apps/Perri/documenso/documenso
-docker compose --env-file .env.production -f docker/production/compose.yml stop documenso   # 不是 down
+cd <旧运行目录>
+docker compose --env-file .env.production -f <旧 compose 文件> stop documenso   # 不是 down
 docker exec documenso-production-database-1 sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   | gzip > /tmp/documenso-move.sql.gz
 gzip -t /tmp/documenso-move.sql.gz && gzip -dc /tmp/documenso-move.sql.gz | tail -n 3   # 应以 dump complete 结尾
@@ -333,14 +304,14 @@ gzip -t /tmp/documenso-move.sql.gz && gzip -dc /tmp/documenso-move.sql.gz | tail
 拷到新服务器，然后在新服务器上**只起数据库**并恢复：
 
 ```bash
-scp -3 <旧服务器别名>:/tmp/documenso-move.sql.gz <生产服务器别名>:/tmp/documenso-move.sql.gz
+scp -3 <旧主机别名>:/tmp/documenso-move.sql.gz prod:/tmp/documenso-move.sql.gz
 ```
 
 再在新服务器上：
 
 ```bash
-cd /opt/apps/Perri/documenso/documenso
-C="docker compose --env-file .env.production -f docker/production/compose.yml"
+cd /srv/documenso
+C="docker compose --env-file .env.production -f compose.yml"
 $C up -d database
 until [ "$(docker inspect -f '{{.State.Health.Status}}' documenso-production-database-1)" = healthy ]; do sleep 2; done
 gzip -dc /tmp/documenso-move.sql.gz | docker exec -i documenso-production-database-1 sh -c \
@@ -380,10 +351,10 @@ FIRST_RELEASE=1 deployment/deploy.sh production
 服务器上，在 `REMOTE_DIR` 里：
 
 ```bash
-cd /opt/apps/Perri/documenso/documenso
+cd /srv/documenso
 REF="$(docker inspect -f '{{.Config.Image}}' documenso-production-documenso-1)"   # compose 引用的 tag
 docker tag documenso-fantasy:rollback "$REF"
-docker compose --env-file .env.production -f docker/production/compose.yml up -d --no-deps --force-recreate documenso
+docker compose --env-file .env.production -f compose.yml up -d --no-deps --force-recreate documenso
 curl -s http://127.0.0.1:3010/api/health
 ```
 
@@ -394,16 +365,16 @@ curl -s http://127.0.0.1:3010/api/health
 会覆盖库里在备份之后发生的一切（签字、新文档、webhook 记录），而且期间 ERP 两边都用不了 Documenso。只在确认需要时做：
 
 ```bash
-cd /opt/apps/Perri/documenso/documenso
-C="docker compose --env-file .env.production -f docker/production/compose.yml"
-BACKUP=/opt/apps/Perri/backups/documenso-deploy/documenso-<时间>-<sha>.sql.gz
+cd /srv/documenso
+C="docker compose --env-file .env.production -f compose.yml"
+BACKUP=/srv/documenso/backups/documenso-<时间>-<sha>.sql.gz
 
 # 1. 先停应用（只停应用，不 down）
 $C stop documenso
 
 # 2. 恢复前再备份一次当前库（以防恢复错）
 docker exec documenso-production-database-1 sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
-  | gzip > /opt/apps/Perri/backups/documenso-deploy/before-restore-$(date -u +%Y%m%dT%H%M%SZ).sql.gz
+  | gzip > /srv/documenso/backups/before-restore-$(date -u +%Y%m%dT%H%M%SZ).sql.gz
 
 # 3. 清空并恢复（备份是普通 SQL；用容器自己的用户名和库名）
 docker exec documenso-production-database-1 sh -c \
@@ -426,13 +397,13 @@ node --test deployment/__tests__/deploy.test.mjs
 bash -n deployment/deploy.sh deployment/deploy-remote.sh
 ```
 
-不需要 `npm install`。测试在临时 git 仓库里跑 `deploy.sh`，用 PATH 里的替身（`__tests__/stubs.mjs`）代替 docker、ssh、curl、df；ssh 替身把远端命令在本机执行，所以 `deploy-remote.sh` 也真的跑一遍，只是面对的是模拟的服务器状态。它证明的是每条路径的**形状**（调了什么、什么顺序、什么从不调用），不证明真实的 docker、构建或服务器行为。
+不需要 `npm install`。测试在临时 git 仓库里跑 `deploy.sh`，用 PATH 里的替身（`__tests__/stubs.mjs`）代替 docker、ssh、curl、df；模拟的运行目录里只有 `compose.yml` 和 `.env.production`。ssh 替身把远端命令在本机执行；目标 `local` 的测试则断言 ssh 从未被调用，所以 `deploy-remote.sh` 也真的跑一遍，只是面对的是模拟的服务器状态。它证明的是每条路径的**形状**（调了什么、什么顺序、什么从不调用），不证明真实的 docker、构建或服务器行为。
 
 ## 已知的未确认项
 
-- 服务器上的 compose 文件是否有未提交的本地改动；本流程不改它，但 `up` 用的是服务器上那一份。
+- 生产服务器上的 `/srv/documenso/compose.yml` 是否和仓库的 `docker/production/compose.yml` 一致；本流程不改它，`up` 用的是服务器上那一份。核对（只看差异，不打印 env 的值）：在开发服务器的 checkout 里 `ssh prod cat /srv/documenso/compose.yml | diff - docker/production/compose.yml`。
 - 现在跑的 `documenso-fantasy:2.14.0-email-template` 是怎么建的没有记录，不确定它包含 overlay 的哪些提交（尤其后两个：空字段修复、`restart: unless-stopped`），也不确定自家 Prisma 迁移（只允许手写签名）是否已在生产库执行。首次用本流程发布时，迁移预览会列出待执行的迁移。
-- `BACKUP_DIR` 默认 `/opt/apps/Perri/backups/documenso-deploy`：ssh 用户能不能写、这块盘够不够放、是否已有别的 Documenso 数据库备份，都要在服务器上确认。
+- `BACKUP_DIR` 默认 `/srv/documenso/backups`：`ubuntu` 能不能建、能不能写、这块盘够不够放，要在生产服务器上确认（预检会建目录并检查可写）。
 - Docker Hub 仓库是否已建、是否私有。
 - 服务器上的 `docker compose` 版本是否支持 `ps --status`、`config --images`（Compose v2 都支持）。
 - ssh 连接在发布中途断开时：脚本已整体读入后才执行，自动回滚靠 bash 的 EXIT trap；断在 `up` 之后、健康检查之前时是否能完整回滚，没有在真机上验证过。

@@ -57,9 +57,11 @@ const setup = (opts = {}) => {
   const fullSha = git(work, 'rev-parse HEAD');
   const sha = fullSha.slice(0, 12);
 
+  // The host's runtime directory as it is on production (/srv/documenso): the
+  // compose file and the env file, no git checkout.
   const remote = join(root, 'remote');
-  mkdirSync(join(remote, 'docker', 'production'), { recursive: true });
-  writeFileSync(join(remote, 'docker', 'production', 'compose.yml'), 'name: documenso-production\n');
+  mkdirSync(remote, { recursive: true });
+  writeFileSync(join(remote, 'compose.yml'), opts.composeBody ?? 'name: documenso-production\n');
   if (!opts.noEnvFile) {
     writeFileSync(join(remote, '.env.production'), 'POSTGRES_USER=documenso\n');
   }
@@ -82,6 +84,9 @@ const setup = (opts = {}) => {
   }
   if (opts.hostFile) {
     writeFileSync(join(config, 'ssh-host'), `${opts.hostFile}\n`);
+  }
+  if (opts.productionHostFile) {
+    writeFileSync(join(config, 'production-host'), `${opts.productionHostFile}\n`);
   }
 
   const bin = join(root, 'stub-bin');
@@ -137,20 +142,24 @@ const setup = (opts = {}) => {
     delete remoteState.images['sha256:older'];
     delete remoteState.images['sha256:pg'];
   }
-  writeFileSync(join(root, 'state-remote.json'), JSON.stringify(remoteState));
+  // A local target: this machine is the host, so the host's state is the
+  // local docker's, and the remote one stays empty.
+  if (opts.local) {
+    writeFileSync(join(root, 'state-local.json'), JSON.stringify(remoteState));
+    writeFileSync(join(root, 'state-remote.json'), JSON.stringify({ next: 1, tags: {}, images: {}, containers: {} }));
+  } else {
+    writeFileSync(join(root, 'state-remote.json'), JSON.stringify(remoteState));
+  }
   writeFileSync(join(root, 'calls.log'), '');
   return { root, work, remote, backups, home, bin, fullSha, sha };
 };
 
 const run = (h, { args = ['production'], env = {} } = {}) => {
   const base = { ...process.env };
-  for (const k of ['SSH_HOST', 'SHIP', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE', 'BUILD_NODE_HEAP_MB', 'FIRST_RELEASE', 'ALLOW_EMPTY_DATABASE', 'SSH_PROBE_MB', 'SSH_PROBE_SECONDS']) {
+  for (const k of ['SSH_HOST', 'SHIP', 'COMPOSE_FILE', 'ENV_FILE', 'REGISTRY_USER', 'REMOTE_DIR', 'BACKUP_DIR', 'MIN_FREE_GB', 'HARNESS_SIDE', 'BUILD_NODE_HEAP_MB', 'FIRST_RELEASE', 'ALLOW_EMPTY_DATABASE', 'SSH_PROBE_MB', 'SSH_PROBE_SECONDS']) {
     delete base[k];
   }
-  const r = spawnSync('bash', [join(h.work, 'deployment', 'deploy.sh'), ...args], {
-    cwd: h.work,
-    encoding: 'utf8',
-    env: {
+  const merged = {
       ...base,
       PATH: `${h.bin}:${process.env.PATH}`,
       HOME: h.home,
@@ -165,7 +174,15 @@ const run = (h, { args = ['production'], env = {} } = {}) => {
       SSH_PROBE_MB: '1',
       SSH_PROBE_SECONDS: '2',
       ...env,
-    },
+  };
+  // An env value of undefined means "leave it unset", so the script's default applies.
+  for (const k of Object.keys(merged)) {
+    if (merged[k] === undefined) delete merged[k];
+  }
+  const r = spawnSync('bash', [join(h.work, 'deployment', 'deploy.sh'), ...args], {
+    cwd: h.work,
+    encoding: 'utf8',
+    env: merged,
   });
   const calls = readFileSync(join(h.root, 'calls.log'), 'utf8');
   const remoteState = JSON.parse(readFileSync(join(h.root, 'state-remote.json'), 'utf8'));
@@ -281,7 +298,7 @@ test('no host configured: BLOCKED with the set-up instructions', () => {
   const r = run(h, { env: { SSH_HOST: '' } });
   assert.equal(r.status, 1);
   assert.match(r.out, /BLOCKED: no target host/);
-  assert.match(r.out, /\.config\/fantasy-documenso\/ssh-host/);
+  assert.match(r.out, /> \S*\.config\/fantasy-documenso\/production-host/);
   assert.equal(r.calls, '');
   cleanup(h);
 });
@@ -324,6 +341,130 @@ test('a host value that could inject shell is refused', () => {
   cleanup(h);
 });
 
+// -- Targets: production-host, local, ssh ---------------------------------------
+
+test('the host comes from ~/.config/fantasy-documenso/production-host when SSH_HOST is unset', () => {
+  const h = setup({ productionHostFile: 'prod' });
+  const r = run(h, { env: { SSH_HOST: '' } });
+  assert.equal(r.status, 0, r.out);
+  assert.ok(has(r, 'local ssh prod true'), r.calls);
+  cleanup(h);
+});
+
+test('production-host wins over the older ssh-host file', () => {
+  const h = setup({ productionHostFile: 'prod', hostFile: 'old-alias' });
+  const r = run(h, { env: { SSH_HOST: '' } });
+  assert.equal(r.status, 0, r.out);
+  assert.ok(has(r, 'local ssh prod true'), r.calls);
+  assert.ok(!has(r, 'old-alias'), r.calls);
+  cleanup(h);
+});
+
+test('SSH_HOST wins over production-host', () => {
+  const h = setup({ productionHostFile: 'prod' });
+  const r = run(h);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(has(r, 'local ssh deploy-target true'), r.calls);
+  assert.ok(!has(r, 'local ssh prod '), r.calls);
+  cleanup(h);
+});
+
+test('remote target: preflight, ship and release all go through ssh', () => {
+  const h = setup();
+  const r = run(h);
+  assert.equal(r.status, 0, r.out);
+  const reach = at(r, 'local ssh deploy-target true');
+  const preflight = at(r, "local ssh deploy-target MODE='preflight'");
+  const load = at(r, 'local ssh deploy-target gunzip | docker load');
+  const release = at(r, "local ssh deploy-target MODE='release'");
+  assert.ok(reach >= 0 && preflight > reach && load > preflight && release > load, r.calls);
+  assert.ok(has(r, 'remote docker compose --env-file .env.production -f compose.yml up -d --no-deps --force-recreate documenso'), r.calls);
+  assert.equal(r.remoteState.tags[LIVE_REF], `sha256:built${h.sha}`);
+  cleanup(h);
+});
+
+test('local target: everything runs on this machine, ssh is never called, nothing is transferred', () => {
+  const h = setup({ local: true });
+  const r = run(h, { env: { SSH_HOST: 'local' } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /to production on this machine \(local\)/);
+  assert.match(r.out, /The image is not shipped \(the target is this machine\)/);
+  assert.ok(!r.calls.includes(' ssh '), `ssh is never called:\n${r.calls}`);
+  assert.ok(!/^remote /m.test(r.calls), `nothing runs on a remote side:\n${r.calls}`);
+  for (const verb of ['docker save', 'docker load', 'docker push', 'docker pull', 'docker-login']) {
+    assert.ok(!has(r, verb), `no ${verb}:\n${r.calls}`);
+  }
+  // The host's own steps ran here: preflight, backup, retag, recreate, health.
+  assert.match(r.out, /-- preflight passed/);
+  assert.ok(has(r, 'local docker compose --env-file .env.production -f compose.yml up -d --no-deps --force-recreate documenso'), r.calls);
+  assert.ok(has(r, 'local curl -s --max-time 10 -w'), r.calls);
+  assert.ok(has(r, ' df -BG'), r.calls);
+  assert.equal(r.backups.filter((f) => f.endsWith('.sql.gz')).length, 1, 'a backup was taken');
+  assert.equal(r.localState.tags[LIVE_REF], `sha256:built${h.sha}`, 'compose tag names the new image');
+  assert.equal(r.localState.tags['documenso-fantasy:rollback'], 'sha256:old', 'rollback is the previous image');
+  // [4/4] would drop 12-hex tags; on the local target they are the host's.
+  assert.ok(r.localState.tags[`documenso-fantasy:${h.sha}`], 'the commit tag the release keeps survives');
+  assert.deepEqual(r.remoteState.containers, {}, 'no remote host touched');
+  cleanup(h);
+});
+
+test('local target from the production-host file', () => {
+  const h = setup({ local: true, productionHostFile: 'local' });
+  const r = run(h, { env: { SSH_HOST: '' } });
+  assert.equal(r.status, 0, r.out);
+  assert.ok(!r.calls.includes(' ssh '), r.calls);
+  assert.equal(r.localState.tags[LIVE_REF], `sha256:built${h.sha}`);
+  cleanup(h);
+});
+
+test('SHIP with the local target is refused before anything runs', () => {
+  for (const ship of ['ssh', 'registry']) {
+    const h = setup({ local: true, registry: true });
+    const r = run(h, { env: { SSH_HOST: 'local', SHIP: ship } });
+    assert.equal(r.status, 1, ship);
+    assert.match(r.out, new RegExp(`BLOCKED: SHIP=${ship} means nothing for the local target`));
+    assert.equal(r.calls, '');
+    cleanup(h);
+  }
+});
+
+test('a runtime directory holding only compose.yml and .env.production passes preflight', () => {
+  const h = setup();
+  assert.deepEqual(readdirSync(h.remote).sort(), ['.env.production', 'compose.yml'], 'no checkout, no .git');
+  // COMPOSE_FILE is left to its default.
+  const r = run(h, { env: { COMPOSE_FILE: undefined } });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /-- preflight passed/);
+  assert.ok(!/^remote git /m.test(r.calls), 'nothing asks git on the host');
+  cleanup(h);
+});
+
+test("compose file without a name: line: the project is the runtime directory's name", () => {
+  // The harness's runtime directory is called "remote"; compose would name the project "remote".
+  const h = setup({ composeBody: 'services: {}\n', noDb: true, volumes: ['remote_database'] });
+  const r = run(h);
+  assert.equal(r.status, 1);
+  assert.match(r.out, /BLOCKED: the database volume remote_database is still here/);
+  cleanup(h);
+});
+
+test('defaults: runtime directory /srv/documenso, compose.yml in it, backups in /srv/documenso/backups', () => {
+  const h = setup();
+  const r = run(h, { env: { REMOTE_DIR: undefined, BACKUP_DIR: undefined, COMPOSE_FILE: undefined } });
+  assert.match(r.out, /to production on deploy-target: runtime directory \/srv\/documenso, backups in \/srv\/documenso\/backups\./);
+  if (!existsSync('/srv/documenso')) {
+    assert.equal(r.status, 1);
+    assert.match(r.out, /BLOCKED: \/srv\/documenso does not exist on this host/);
+  }
+  cleanup(h);
+});
+
+test('no /opt/apps/Perri path is left in the scripts or the README', () => {
+  for (const f of ['deploy.sh', 'deploy-remote.sh', 'README.md']) {
+    assert.ok(!readFileSync(join(deploymentDir, f), 'utf8').includes('/opt/apps/Perri'), f);
+  }
+});
+
 // -- Preflight: order and messages ----------------------------------------------
 
 test('local docker down: BLOCKED before ssh is tried', () => {
@@ -357,10 +498,10 @@ test('env file missing on the host: BLOCKED, nothing built', () => {
 
 test('compose file missing on the host: BLOCKED, nothing built', () => {
   const h = setup();
-  rmSync(join(h.remote, 'docker'), { recursive: true });
+  rmSync(join(h.remote, 'compose.yml'));
   const r = run(h);
   assert.equal(r.status, 1);
-  assert.match(r.out, /BLOCKED: .*docker\/production\/compose.yml does not exist/);
+  assert.match(r.out, /BLOCKED: .*\/compose.yml does not exist/);
   assertNothingBuilt(r);
   cleanup(h);
 });
@@ -399,7 +540,7 @@ test('compose file names another image than the running container: BLOCKED', () 
   const h = setup({ scenario: { composeImages: ['postgres:15', 'documenso-fantasy:something-else'] } });
   const r = run(h);
   assert.equal(r.status, 1);
-  assert.match(r.out, /BLOCKED: docker\/production\/compose.yml no longer names documenso-fantasy:2.14.0-email-template/);
+  assert.match(r.out, /BLOCKED: compose.yml no longer names documenso-fantasy:2.14.0-email-template/);
   assertNothingBuilt(r);
   cleanup(h);
 });
@@ -413,12 +554,14 @@ test('too little disk on the host: BLOCKED, nothing built', () => {
   cleanup(h);
 });
 
-test('backup directory inside REMOTE_DIR is refused', () => {
+// Was "backup directory inside REMOTE_DIR is refused": REMOTE_DIR is no longer
+// a checkout, and the default BACKUP_DIR (/srv/documenso/backups) is inside it.
+test('backup directory inside REMOTE_DIR is allowed (the default layout)', () => {
   const h = setup();
-  const r = run(h, { env: { BACKUP_DIR: join(h.remote, 'backups') } });
-  assert.equal(r.status, 1);
-  assert.match(r.out, /BLOCKED: BACKUP_DIR must be outside REMOTE_DIR/);
-  assert.equal(r.calls, '');
+  const inside = join(h.remote, 'backups');
+  const r = run(h, { env: { BACKUP_DIR: inside } });
+  assert.equal(r.status, 0, r.out);
+  assert.equal(readdirSync(inside).filter((f) => f.endsWith('.sql.gz')).length, 1, 'the dump lands inside');
   cleanup(h);
 });
 
@@ -893,12 +1036,12 @@ test('first release, unreadable database: BLOCKED', () => {
 test('first release, a bind-mounted file (the certificate) missing: BLOCKED before the database starts', () => {
   const h = setup({ fresh: true });
   writeFileSync(
-    join(h.remote, 'docker', 'production', 'compose.yml'),
+    join(h.remote, 'compose.yml'),
     `name: documenso-production\nservices:\n  documenso:\n    volumes:\n      - ${h.root}/no-such-cert.p12:/opt/documenso/cert.p12:ro\n`,
   );
   const r = run(h, { env: { FIRST_RELEASE: '1' } });
   assert.equal(r.status, 1);
-  assert.match(r.out, /BLOCKED: docker\/production\/compose.yml mounts host paths that do not exist on this host:/);
+  assert.match(r.out, /BLOCKED: compose.yml mounts host paths that do not exist on this host:/);
   assert.match(r.out, /no-such-cert\.p12/);
   assert.ok(!r.calls.includes(' up '), 'the database is not started');
   assertNothingBuilt(r);
@@ -918,7 +1061,7 @@ test('first release with restored data: db up, data check, build, ship, backup, 
   const cert = join(h.root, 'cert.p12');
   writeFileSync(cert, 'fake');
   writeFileSync(
-    join(h.remote, 'docker', 'production', 'compose.yml'),
+    join(h.remote, 'compose.yml'),
     `name: documenso-production\nservices:\n  documenso:\n    image: ${LIVE_REF}\n    volumes:\n      - ${cert}:/opt/documenso/cert.p12:ro\n`,
   );
   const r = run(h, { env: { FIRST_RELEASE: '1' } });

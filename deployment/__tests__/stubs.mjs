@@ -282,7 +282,8 @@ if (url.startsWith('https://hub.docker.com/v2/repositories/')) {
   if (args.includes('-K')) reply('{"is_private":' + (hub.private === false ? 'false' : 'true') + '}', hub.repo || 200);
   reply('{}', hub.anon || 404);
 }
-const state = JSON.parse(fs.readFileSync(path.join(root, 'state-remote.json'), 'utf8'));
+// The app answers on the host: the remote side, or this machine for a local target.
+const state = JSON.parse(fs.readFileSync(path.join(root, 'state-' + side + '.json'), 'utf8'));
 const app = state.containers.documenso;
 const image = app && state.images[app.image];
 const isNew = image && image.labels && image.labels['org.opencontainers.image.revision'] === scenario.fullSha;

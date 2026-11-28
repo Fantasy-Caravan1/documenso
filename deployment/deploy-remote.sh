@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # The half of deployment/deploy.sh that runs on the host. It is piped in over
-# ssh (`bash -s`), so no copy of it lives there to go stale, and it takes all of
-# its settings from the environment deploy.sh puts in front of it. Not meant to
-# be run by hand.
+# ssh (`bash -s`), or into a local bash when the target is this machine, so no
+# copy of it lives there to go stale, and it takes all of its settings from the
+# environment deploy.sh puts in front of it. Not meant to be run by hand.
+#
+# All it needs on the host is REMOTE_DIR holding COMPOSE_FILE and ENV_FILE
+# (and what the compose file mounts). REMOTE_DIR need not be a git checkout.
 #
 #   MODE=preflight  checks only; changes nothing (except FIRST_RELEASE=1 on a
 #                   host with no database container: it starts `database`).
@@ -79,7 +82,7 @@ compose() {
 preflight() {
   [ -d "$REMOTE_DIR" ] || blocked "$REMOTE_DIR does not exist on this host."
   cd "$REMOTE_DIR"
-  [ -f "$COMPOSE_FILE" ] || blocked "$REMOTE_DIR/$COMPOSE_FILE does not exist."
+  [ -f "$COMPOSE_FILE" ] || blocked "$REMOTE_DIR/$COMPOSE_FILE does not exist. It is a copy of the repository's docker/production/compose.yml, kept on the host."
   [ -f "$ENV_FILE" ] || blocked "$REMOTE_DIR/$ENV_FILE does not exist. It is kept by hand on the host and never shipped."
   docker info --format '{{.ServerVersion}}' >/dev/null 2>&1 || blocked "docker is not usable on this host by this user."
 
@@ -87,7 +90,10 @@ preflight() {
   # from the compose file's own `name:` line, not from `docker compose config`,
   # which would print the whole configuration with the env file's values in it.
   PROJECT="$(sed -n -E 's/^name:[[:space:]]*["'\'']?([A-Za-z0-9_-]+)["'\'']?[[:space:]]*$/\1/p' "$COMPOSE_FILE" | head -n1)"
-  [ -n "$PROJECT" ] || PROJECT="$(basename "$(dirname "$COMPOSE_FILE")")"
+  # Without one, compose names the project after the compose file's directory:
+  # resolved to an absolute path, since for compose.yml in REMOTE_DIR itself
+  # `dirname` alone is just '.'.
+  [ -n "$PROJECT" ] || PROJECT="$(basename "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)")"
   DB_VOLUME="${PROJECT}_database"
 
   local app_all

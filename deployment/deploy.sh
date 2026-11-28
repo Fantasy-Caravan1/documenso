@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the Fantasy Documenso image on this machine, ship it to the host, and
-# swap the running app container over to it.
+# swap the running app container over to it. The host is another machine
+# reached over ssh, or this machine itself (target `local`).
 #
 #   deployment/deploy.sh production
 #
@@ -14,14 +15,21 @@
 #              pushed overlay commit, so the image holds that commit and nothing
 #              else this checkout happens to have lying around.
 #   [2/4]      ship it: through a private Docker Hub repository (HTTPS), or
-#              piped over ssh as a gzipped tarball.
-#   [3/4]      deployment/deploy-remote.sh, piped over ssh: rollback point,
-#              database backup, retag, recreate the app service only, health
-#              check, roll back on failure.
-#   [4/4]      drop this release's local image tags.
+#              piped over ssh as a gzipped tarball. Skipped for a local target:
+#              the image is already where it runs.
+#   [3/4]      deployment/deploy-remote.sh, piped over ssh (or into a local
+#              bash): rollback point, database backup, retag, recreate the app
+#              service only, health check, roll back on failure.
+#   [4/4]      drop this release's local image tags (not for a local target,
+#              where they are the host's).
 #
 # The host is never named here: this repository is public. It comes from
-# SSH_HOST or ~/.config/fantasy-documenso/ssh-host.
+# SSH_HOST, ~/.config/fantasy-documenso/production-host, or the older
+# ~/.config/fantasy-documenso/ssh-host, in that order. The value `local` means
+# this machine.
+#
+# On the host the scripts need only a runtime directory (REMOTE_DIR) holding
+# the compose file and the env file; it does not have to be a git checkout.
 #
 # Runs on macOS's /bin/bash 3.2: no associative arrays, no ${var,,}, no mapfile,
 # and no empty-array expansion under set -u.
@@ -53,14 +61,18 @@ RELEASE_BRANCH=fantasy-production-overlay
 APP_IMAGE=documenso-fantasy
 
 CONFIG_DIR="$HOME/.config/fantasy-documenso"
-HOST_FILE="$CONFIG_DIR/ssh-host"
+HOST_FILE="$CONFIG_DIR/production-host"
+# The name this file had before there was a local target; still read.
+LEGACY_HOST_FILE="$CONFIG_DIR/ssh-host"
 REPO_FILE="$CONFIG_DIR/dockerhub-repo"
 TOKEN_FILE="$CONFIG_DIR/dockerhub-pull-token"
 
-REMOTE_DIR="${REMOTE_DIR:-/opt/apps/Perri/documenso/documenso}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker/production/compose.yml}"
+# The runtime directory on the host: compose file and env file, nothing else
+# required. COMPOSE_FILE and ENV_FILE are relative to it.
+REMOTE_DIR="${REMOTE_DIR:-/srv/documenso}"
+COMPOSE_FILE="${COMPOSE_FILE:-compose.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/apps/Perri/backups/documenso-deploy}"
+BACKUP_DIR="${BACKUP_DIR:-/srv/documenso/backups}"
 BACKUP_KEEP="${BACKUP_KEEP:-5}"
 MIN_FREE_GB="${MIN_FREE_GB:-8}"
 APP_PORT="${APP_PORT:-3010}"
@@ -114,9 +126,6 @@ case "$ALLOW_EMPTY_DATABASE" in 0|1) ;; *) blocked "ALLOW_EMPTY_DATABASE must be
 if [ "$ALLOW_EMPTY_DATABASE" = 1 ] && [ "$FIRST_RELEASE" != 1 ]; then
   blocked "ALLOW_EMPTY_DATABASE=1 only means something with FIRST_RELEASE=1."
 fi
-case "$BACKUP_DIR/" in
-  "$REMOTE_DIR"/*) blocked "BACKUP_DIR must be outside REMOTE_DIR ($REMOTE_DIR): a checkout is no place for database dumps." ;;
-esac
 
 # -- The commit --------------------------------------------------------------
 # One commit, pushed, on the release branch. The image's tag and its
@@ -139,26 +148,51 @@ VERSION="$(git describe --tags --always HEAD 2>/dev/null || echo "$SHA")"
 
 # -- Where it goes -----------------------------------------------------------
 
+# SSH_HOST, then production-host, then the older ssh-host file.
 if [ -z "${SSH_HOST:-}" ] && [ -f "$HOST_FILE" ]; then
   SSH_HOST="$(tr -d '[:space:]' < "$HOST_FILE")"
+fi
+if [ -z "${SSH_HOST:-}" ] && [ -f "$LEGACY_HOST_FILE" ]; then
+  SSH_HOST="$(tr -d '[:space:]' < "$LEGACY_HOST_FILE")"
 fi
 SSH_HOST="${SSH_HOST:-}"
 if [ -z "$SSH_HOST" ]; then
   echo "BLOCKED: no target host. This repository is public, so the host is not written in it." >&2
   echo "  Set SSH_HOST for one run, or once for this machine:" >&2
-  echo "    mkdir -p $CONFIG_DIR && echo '<ssh host or ~/.ssh/config alias>' > $HOST_FILE" >&2
+  echo "    mkdir -p $CONFIG_DIR && echo '<ssh host or ~/.ssh/config alias, or local>' > $HOST_FILE" >&2
   exit 1
 fi
 # An ~/.ssh/config alias (with ProxyJump, say), user@host, a name or an IP.
 # No whitespace, quotes or '$': the value goes into commands and messages.
 HOST_FORMAT='^[A-Za-z0-9_][A-Za-z0-9._@:-]*$'
 [[ "$SSH_HOST" =~ $HOST_FORMAT ]] || blocked "SSH_HOST is not an ssh destination (letters, digits, '.', '_', '-', '@', ':' only)."
+# `local`: the host is this machine. No ssh, and the image is not shipped.
+if [ "$SSH_HOST" = local ]; then
+  TARGET_LOCAL=1
+  TARGET_NAME="this machine (local)"
+else
+  TARGET_LOCAL=0
+  TARGET_NAME="$SSH_HOST"
+fi
+
+# Runs one command string on the host: over ssh, or in a local bash for the
+# local target. stdin passes through either way.
+on_target() {
+  if [ "$TARGET_LOCAL" = 1 ]; then
+    bash -c "$1"
+  else
+    ssh "$SSH_HOST" "$1"
+  fi
+}
 
 # -- Which way the image travels ---------------------------------------------
 
 MISSING=""
 [ -f "$REPO_FILE" ] || MISSING="$MISSING $REPO_FILE"
 [ -f "$TOKEN_FILE" ] || MISSING="$MISSING $TOKEN_FILE"
+if [ "$TARGET_LOCAL" = 1 ] && [ -n "${SHIP:-}" ]; then
+  blocked "SHIP=$SHIP means nothing for the local target: the image is built where it runs and is not shipped."
+fi
 case "${SHIP:-}" in
   registry)
     if [ -n "$MISSING" ]; then
@@ -175,16 +209,21 @@ case "${SHIP:-}" in
     SHIP_WHY="SHIP=ssh"
     ;;
   "")
-    # Decided by measurement once ssh is known to work: see probe_ssh below.
-    SHIP_VIA=auto
-    SHIP_WHY=""
+    if [ "$TARGET_LOCAL" = 1 ]; then
+      SHIP_VIA=none
+      SHIP_WHY="the target is this machine"
+    else
+      # Decided by measurement once ssh is known to work: see probe_ssh below.
+      SHIP_VIA=auto
+      SHIP_WHY=""
+    fi
     ;;
   *)
     blocked "SHIP must be 'registry' or 'ssh', not '$SHIP'."
     ;;
 esac
 
-echo "Releasing $VERSION ($SHA) to $ENVIRONMENT."
+echo "Releasing $VERSION ($SHA) to $ENVIRONMENT on $TARGET_NAME: runtime directory $REMOTE_DIR, backups in $BACKUP_DIR."
 if [ "$FIRST_RELEASE" = 1 ]; then
   echo "FIRST RELEASE: no app container is expected on the host, and there will be nothing to roll back to."
 fi
@@ -205,7 +244,7 @@ if [ "${DOCKER_MEM:-0}" -lt "$NEED_MEM" ]; then
   exit 1
 fi
 
-if ! ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" true 2>/dev/null; then
+if [ "$TARGET_LOCAL" = 0 ] && ! ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_HOST" true 2>/dev/null; then
   echo "BLOCKED: cannot reach $SSH_HOST over ssh (BatchMode, 15s timeout). Check the host, your key and ~/.ssh/config." >&2
   echo "  The production server does not open port 22 to the outside: use an ~/.ssh/config alias with" >&2
   echo "  ProxyJump through the development server, or run this on the development server itself" >&2
@@ -264,7 +303,11 @@ if [ "$SHIP_VIA" = auto ]; then
     exit 1
   fi
 fi
-echo "The image travels by $SHIP_VIA ($SHIP_WHY)."
+if [ "$SHIP_VIA" = none ]; then
+  echo "The image is not shipped ($SHIP_WHY)."
+else
+  echo "The image travels by $SHIP_VIA ($SHIP_WHY)."
+fi
 
 # Values travel as environment variables in front of `bash -s`, never as
 # arguments to the script, and the script itself arrives on stdin: there is no
@@ -282,8 +325,8 @@ remote_env() {
 # FIRST_RELEASE=1 on a host with no database container it starts the
 # `database` service alone and checks it is not empty, before the build rather
 # than twenty minutes after. The release runs the same checks again.
-say "Preflight on $SSH_HOST"
-ssh "$SSH_HOST" "$(remote_env preflight) bash -s" < deployment/deploy-remote.sh
+say "Preflight on $TARGET_NAME"
+on_target "$(remote_env preflight) bash -s" < deployment/deploy-remote.sh
 
 # The registry is checked before anything is built, because a push is the one
 # step here that cannot be taken back: Docker Hub creates a repository that
@@ -388,7 +431,9 @@ git archive --format=tar "$FULL_SHA" | docker build \
 # -- Ship --------------------------------------------------------------------
 
 REGISTRY_REF=""
-if [ "$SHIP_VIA" = registry ]; then
+if [ "$SHIP_VIA" = none ]; then
+  say "[2/4] Nothing to ship: the target is this machine, and the image is already here"
+elif [ "$SHIP_VIA" = registry ]; then
   REGISTRY_REF="$REPO:documenso-$ENVIRONMENT-$SHA"
   say "[2/4] Ship the image through the registry $REPO ($SHIP_WHY)"
   docker tag "$APP_IMAGE:$SHA" "$REGISTRY_REF"
@@ -419,7 +464,7 @@ if [ "$SHIP_VIA" = registry ]; then
     docker tag "$REGISTRY_REF" "$TARGET"
     docker rmi "$REGISTRY_REF" >/dev/null
   '
-  printf '%s\n' "$PULL_TOKEN" | ssh "$SSH_HOST" \
+  printf '%s\n' "$PULL_TOKEN" | on_target \
     "REGISTRY_REF='$REGISTRY_REF' REGISTRY_USER='$REGISTRY_USER' TARGET='$APP_IMAGE:$SHA' bash -c '$REMOTE_PULL'"
   PULL_TOKEN=""
 else
@@ -457,13 +502,13 @@ else
       print STDERR "\n" if $tty;
     ' "$1"
   }
-  docker save "$APP_IMAGE:$SHA" | meter "$SIZE" | gzip -1 | ssh "$SSH_HOST" 'gunzip | docker load'
+  docker save "$APP_IMAGE:$SHA" | meter "$SIZE" | gzip -1 | on_target 'gunzip | docker load'
 fi
 
 # -- Release -----------------------------------------------------------------
 
-say "[3/4] Release on $SSH_HOST"
-ssh "$SSH_HOST" "$(remote_env release) bash -s" < deployment/deploy-remote.sh
+say "[3/4] Release on $TARGET_NAME"
+on_target "$(remote_env release) bash -s" < deployment/deploy-remote.sh
 
 # -- Forget the local copy ---------------------------------------------------
 # After the release, not after the upload: until the release has finished, the
@@ -471,13 +516,19 @@ ssh "$SSH_HOST" "$(remote_env release) bash -s" < deployment/deploy-remote.sh
 # makes are removed — a 12-hex commit tag of this image, and the registry tag —
 # so anything else named documenso-fantasy on this machine is left alone.
 
-say "[4/4] Drop the local image tags for $APP_IMAGE"
-if [ -n "$REGISTRY_REF" ]; then
-  docker image rm "$REGISTRY_REF" >/dev/null 2>&1 || true
+# On the local target this machine is the host, and the release has already
+# kept the tags it wants: nothing to drop.
+if [ "$TARGET_LOCAL" = 1 ]; then
+  say "[4/4] Local target: the image tags stay, they are the host's"
+else
+  say "[4/4] Drop the local image tags for $APP_IMAGE"
+  if [ -n "$REGISTRY_REF" ]; then
+    docker image rm "$REGISTRY_REF" >/dev/null 2>&1 || true
+  fi
+  docker images "$APP_IMAGE" --format '{{.Tag}}' \
+    | { grep -E '^[0-9a-f]{12}$' || true; } \
+    | while read -r tag; do docker image rm "$APP_IMAGE:$tag" >/dev/null 2>&1 || true; done
 fi
-docker images "$APP_IMAGE" --format '{{.Tag}}' \
-  | { grep -E '^[0-9a-f]{12}$' || true; } \
-  | while read -r tag; do docker image rm "$APP_IMAGE:$tag" >/dev/null 2>&1 || true; done
 
 echo
 echo "DEPLOYED: $ENVIRONMENT is running $VERSION ($SHA)."
